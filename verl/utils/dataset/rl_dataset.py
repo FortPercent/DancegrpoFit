@@ -153,7 +153,6 @@ class RLHFDataset(Dataset):
             dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
             dataframes.append(dataframe)
         self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
-
         print(f"dataset len: {len(self.dataframe)}")
 
         # filter out too long prompts
@@ -233,7 +232,7 @@ class RLHFDataset(Dataset):
             # 加载numpy文件并转换为tensor
             context_numpy = np.load(row_dict['context_path'])
             context = torch.from_numpy(context_numpy)  # shape: (L, C)
-            
+            print(row_dict['context_path'],context.shape)
             row_dict['context']=context
         else:
             if self.processor is not None:

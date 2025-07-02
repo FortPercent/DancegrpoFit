@@ -13,9 +13,14 @@ data:
   type: diffusion
 
 actor_rollout_ref:
+  type: diffusion
   model:
     vae_model_path: data/flux
     data_json_path: data/rl_embeddings/videos2caption.json
+  actor:
+    timestep_fraction: 0.6
+    clip_range: 1e-4
+    adv_clip_max: 5.0
   cfg: 0.0
   h: 720
   w: 720
@@ -24,8 +29,9 @@ actor_rollout_ref:
   eta: 0.3
   lr_warmup_steps: 0
   use_hpsv2: True
-  shift: 3
+  shift: 8.0
   timestep_fraction: 0.6
   init_same_noise: True
-  clip_range: 1e-4
-  adv_clip_max: 5.0
+
+reward_model:
+  type: diffusion

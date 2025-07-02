@@ -66,6 +66,9 @@ from verl.utils.model import compute_position_id_with_mask
 from verl.utils.py_functional import convert_to_regular_types
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
+from diffusers.image_processor import VaeImageProcessor
+
+
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
@@ -444,7 +447,14 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         assert self.world_size % infer_tp == 0, f"rollout world_size: {self.world_size} is not divisible by infer_tp: {infer_tp}"
         rollout_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, infer_tp), mesh_dim_names=["dp", "infer_tp"])
         rollout_name = self.config.rollout.name
-        if rollout_name == "hf":
+        if self.config.type=="diffusion":
+            from verl.workers.rollout import DiffusionRollout
+            from verl.workers.sharding_manager.base import BaseShardingManager
+
+            rollout = DiffusionRollout(module=self.actor_module_fsdp, config=self.config)
+            rollout_sharding_manager = BaseShardingManager()
+            #TODO
+        elif rollout_name == "hf":
             from verl.workers.rollout import HFRollout
             from verl.workers.sharding_manager.base import BaseShardingManager
 
@@ -1243,7 +1253,7 @@ class RewardModelWorker(Worker, WorkerProfilerExtension):
     def _build_model(self, config):
         # the following line is necessary
         from torch.distributed.fsdp import CPUOffload
-        from transformers import AutoConfig, AutoModelForTokenClassification
+        from transformers import AutoConfig, AutoModelForTokenClassification, GPT2Config
 
         use_shm = config.model.get("use_shm", False)
         # download the checkpoint from hdfs
@@ -1257,63 +1267,99 @@ class RewardModelWorker(Worker, WorkerProfilerExtension):
             self.input_tokenizer = hf_tokenizer(input_tokenizer_local_path, trust_remote_code=config.model.get("trust_remote_code", False))
             self.tokenizer = hf_tokenizer(local_path, trust_remote_code=config.model.get("trust_remote_code", False))
 
-        trust_remote_code = config.model.get("trust_remote_code", False)
-        model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=trust_remote_code)
-        model_config.num_labels = 1
+        if config.type=="diffusion":
+            from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
+            from typing import Union
+            import huggingface_hub
+            from hpsv2.utils import root_path, hps_version_map
 
-        # note that we have to create model in fp32. Otherwise, the optimizer is in bf16, which is incorrect
-        init_context = get_init_weight_context_manager(use_meta_tensor=not model_config.tie_word_embeddings, mesh=self.device_mesh)
+            def initialize_model():
+                model_dict = {}
+                model, preprocess_train, preprocess_val = create_model_and_transforms(
+                    'ViT-H-14',
+                    self.config.model.path,
+                    precision='amp',
+                    jit=False,
+                    force_quick_gelu=False,
+                    force_custom_text=False,
+                    force_patch_dropout=False,
+                    force_image_size=None,
+                    pretrained_image=False,
+                    image_mean=None,
+                    image_std=None,
+                    light_augmentation=True,
+                    aug_cfg={},
+                    output_dict=True,
+                    with_score_predictor=False,
+                    with_region_predictor=False
+                )
+                model_dict['model'] = model
+                model_dict['preprocess_val'] = preprocess_val
+                return model_dict
+            model_dict = initialize_model()
+            reward_module = model_dict['model']
+            preprocess_val = model_dict['preprocess_val']
 
-        with init_context(), warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            model_config.classifier_dropout = 0.0
-            reward_module = AutoModelForTokenClassification.from_pretrained(
-                pretrained_model_name_or_path=local_path,
-                config=model_config,
-                torch_dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
-                trust_remote_code=trust_remote_code,
-            )
-
-            apply_monkey_patch(
-                model=reward_module,
-                use_remove_padding=config.model.get("use_remove_padding", False),
-                ulysses_sp_size=self.ulysses_sequence_parallel_size,
-            )
-
-            reward_module.to(torch.bfloat16)
-
-        auto_wrap_policy = get_fsdp_wrap_policy(module=reward_module, config=self.config.model.fsdp_config)
-
-        fsdp_mesh = self.device_mesh
-        sharding_strategy = get_sharding_strategy(fsdp_mesh)
-
-        if config.strategy == "fsdp":
-            reward_module = FSDP(
-                reward_module,
-                param_init_fn=init_fn,
-                use_orig_params=False,
-                auto_wrap_policy=auto_wrap_policy,
-                device_id=get_device_id(),
-                sharding_strategy=sharding_strategy,  # zero3
-                sync_module_states=True,
-                cpu_offload=CPUOffload(offload_params=True),
-                forward_prefetch=self.config.model.fsdp_config.forward_prefetch,
-                device_mesh=self.device_mesh,
-            )
-        elif config.strategy == "fsdp2":
-            assert CPUOffloadPolicy is not None, "PyTorch version >= 2.4 is required for using fully_shard API (FSDP2)"
-            cpu_offload = CPUOffloadPolicy(pin_memory=True)
-            fsdp_kwargs = {
-                "mesh": fsdp_mesh,
-                "offload_policy": cpu_offload,
-                "reshard_after_forward": config.model.fsdp_config.reshard_after_forward,
-            }
-            full_state = reward_module.state_dict()
-            apply_fsdp2(reward_module, fsdp_kwargs, config.model.fsdp_config)
-            fsdp2_load_full_state_dict(reward_module, full_state, fsdp_mesh, cpu_offload)
+            checkpoint = torch.load(self.config.model.path)
+            reward_module.load_state_dict(checkpoint['state_dict'])
+            processor = get_tokenizer('ViT-H-14')
         else:
-            raise NotImplementedError(f"Unknown strategy: {config.strategy}")
+            trust_remote_code = config.model.get("trust_remote_code", False)
+            model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=trust_remote_code)
+            model_config.num_labels = 1
+
+            # note that we have to create model in fp32. Otherwise, the optimizer is in bf16, which is incorrect
+            init_context = get_init_weight_context_manager(use_meta_tensor=not model_config.tie_word_embeddings, mesh=self.device_mesh)
+
+            with init_context(), warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model_config.classifier_dropout = 0.0
+                reward_module = AutoModelForTokenClassification.from_pretrained(
+                    pretrained_model_name_or_path=local_path,
+                    config=model_config,
+                    torch_dtype=torch.bfloat16,
+                    attn_implementation="flash_attention_2",
+                    trust_remote_code=trust_remote_code,
+                )
+                apply_monkey_patch(
+                    model=reward_module,
+                    use_remove_padding=config.model.get("use_remove_padding", False),
+                    ulysses_sp_size=self.ulysses_sequence_parallel_size,
+                )
+
+                reward_module.to(torch.bfloat16)
+
+            auto_wrap_policy = get_fsdp_wrap_policy(module=reward_module, config=self.config.model.fsdp_config)
+
+            fsdp_mesh = self.device_mesh
+            sharding_strategy = get_sharding_strategy(fsdp_mesh)
+
+            if config.strategy == "fsdp":
+                reward_module = FSDP(
+                    reward_module,
+                    param_init_fn=init_fn,
+                    use_orig_params=False,
+                    auto_wrap_policy=auto_wrap_policy,
+                    device_id=get_device_id(),
+                    sharding_strategy=sharding_strategy,  # zero3
+                    sync_module_states=True,
+                    cpu_offload=CPUOffload(offload_params=True),
+                    forward_prefetch=self.config.model.fsdp_config.forward_prefetch,
+                    device_mesh=self.device_mesh,
+                )
+            elif config.strategy == "fsdp2":
+                assert CPUOffloadPolicy is not None, "PyTorch version >= 2.4 is required for using fully_shard API (FSDP2)"
+                cpu_offload = CPUOffloadPolicy(pin_memory=True)
+                fsdp_kwargs = {
+                    "mesh": fsdp_mesh,
+                    "offload_policy": cpu_offload,
+                    "reshard_after_forward": config.model.fsdp_config.reshard_after_forward,
+                }
+                full_state = reward_module.state_dict()
+                apply_fsdp2(reward_module, fsdp_kwargs, config.model.fsdp_config)
+                fsdp2_load_full_state_dict(reward_module, full_state, fsdp_mesh, cpu_offload)
+            else:
+                raise NotImplementedError(f"Unknown strategy: {config.strategy}")
         return reward_module
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)

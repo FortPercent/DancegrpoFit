@@ -16,9 +16,6 @@ clip_ratio_high=0.28
 
 max_prompt_length=$((1024 * 2))
 max_response_length=$((1024 * 20))
-enable_overlong_buffer=True
-overlong_buffer_len=$((1024 * 4))
-overlong_penalty_factor=1.0
 
 loss_agg_mode="token-mean"
 
@@ -28,7 +25,7 @@ max_num_gen_batches=10
 train_prompt_bsz=1
 gen_prompt_bsz=$((train_prompt_bsz * 3))
 n_resp_per_prompt=16
-train_prompt_mini_bsz=1
+train_prompt_mini_bsz=4
 
 # Ray
 WORKING_DIR=${WORKING_DIR:-"${PWD}"}
@@ -40,7 +37,7 @@ MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-32B"}
 CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
 TRAIN_FILE=${TRAIN_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/GRPO/Dancegrpo/data/rl_embeddings/processed_wan_prompt.json"}
 TEST_FILE=${TEST_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/GRPO/Dancegrpo/data/rl_embeddings/processed_wan_prompt.json"}
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 # Algorithm
 temperature=1.0
@@ -69,6 +66,7 @@ python3 -m recipe.dancegrpo.main_dancegrpo \
     algorithm.use_kl_in_reward=${use_kl_in_reward} \
     algorithm.kl_ctrl.kl_coef=${kl_coef} \
     actor_rollout_ref.model.path='/nvfile-heatstorage/model_zoo/Wan2___1-T2V-1___3B' \
+    actor_rollout_ref.model.vae_model_path='/nvfile-heatstorage/model_zoo/Wan2___1-T2V-1___3B/Wan2.1_VAE.pth' \
     actor_rollout_ref.cfg=0.0 \
     actor_rollout_ref.h=720 \
     actor_rollout_ref.w=720 \
@@ -78,10 +76,10 @@ python3 -m recipe.dancegrpo.main_dancegrpo \
     actor_rollout_ref.lr_warmup_steps=0 \
     actor_rollout_ref.use_hpsv2=True \
     actor_rollout_ref.shift=3 \
-    actor_rollout_ref.timestep_fraction=0.6 \
+    actor_rollout_ref.actor.timestep_fraction=0.6 \
     actor_rollout_ref.init_same_noise=True \
-    actor_rollout_ref.clip_range=1e-4 \
-    actor_rollout_ref.adv_clip_max=5.0 \
+    actor_rollout_ref.actor.clip_range=1e-4 \
+    actor_rollout_ref.actor.adv_clip_max=5.0 \
     actor_rollout_ref.actor.use_kl_loss=${use_kl_loss} \
     actor_rollout_ref.actor.kl_loss_coef=${kl_loss_coef} \
     actor_rollout_ref.actor.clip_ratio_low=${clip_ratio_low} \
@@ -120,7 +118,8 @@ python3 -m recipe.dancegrpo.main_dancegrpo \
     actor_rollout_ref.ref.fsdp_config.param_offload=${offload} \
     actor_rollout_ref.ref.ulysses_sequence_parallel_size=${sp_size} \
     actor_rollout_ref.actor.fsdp_config.fsdp_size=-1 \
-    reward_model.model.path='' \
+    reward_model.enable=True \
+    reward_model.model.path='./model/HPS_v2.1_compressed.pt' \
     reward_model.micro_batch_size_per_gpu=1 \
     reward_model.model.input_tokenizer=null \
     trainer.logger=['tensorboard'] \
@@ -134,4 +133,5 @@ python3 -m recipe.dancegrpo.main_dancegrpo \
     trainer.total_epochs=1 \
     trainer.default_local_dir="${CKPTS_DIR}" \
     trainer.resume_mode=auto \
-    trainer.type="diffusion"
+    trainer.type="diffusion" \
+    trainer.balance_batch=False

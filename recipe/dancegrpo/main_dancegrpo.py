@@ -67,7 +67,7 @@ class TaskRunner:
         from verl.trainer.ppo.ray_trainer import ResourcePoolManager, Role
 
         role_worker_mapping = {
-            Role.Actor: ray.remote(DiffusionActorRolloutRefWorker),
+            Role.ActorRollout: ray.remote(DiffusionActorRolloutRefWorker),
         }
 
         global_pool_id = "global_pool"
@@ -75,7 +75,7 @@ class TaskRunner:
             global_pool_id: [config.trainer.n_gpus_per_node] * config.trainer.nnodes,
         }
         mapping = {
-            Role.Actor: global_pool_id,
+            Role.ActorRollout: global_pool_id,
         }
 
         # use reference model
@@ -83,45 +83,51 @@ class TaskRunner:
             role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
             mapping[Role.RefPolicy] = global_pool_id
 
+        # we should adopt a multi-source reward function here
+        # - for rule-based rm, we directly call a reward score
+        # - for model-based rm, we call a model
+        # - for code related prompt, we send to a sandbox if there are test cases
+        # - finally, we combine all the rewards together
+        # - The reward type depends on the tag of the data
         if config.reward_model.enable:
-            from .dancegrpo_fsdp_worker import PRIMERewardModelWorker
-
-            role_worker_mapping[Role.RewardModel] = ray.remote(PRIMERewardModelWorker)
+            if config.reward_model.strategy == "fsdp":
+                from .dancegrpo_fsdp_worker import DiffusionRewardModelWorker as RewardModelWorker
+            elif config.reward_model.strategy == "megatron":
+                from verl.workers.megatron_workers import RewardModelWorker
+            else:
+                raise NotImplementedError
+            role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
             mapping[Role.RewardModel] = global_pool_id
-
-        reward_manager_name = config.reward_model.get("reward_manager", "naive")
-        if reward_manager_name == "naive":
-            from verl.workers.reward_manager import NaiveRewardManager
-
-            reward_manager_cls = NaiveRewardManager
-        elif reward_manager_name == "prime":
-            from verl.workers.reward_manager import PrimeRewardManager
-
-            reward_manager_cls = PrimeRewardManager
-        else:
-            raise NotImplementedError
-        
-        compute_score = get_custom_reward_fn(config)
-        reward_fn = reward_manager_cls(
-            tokenizer=tokenizer,
-            num_examine=0,
-            compute_score=compute_score,
-            reward_fn_key=config.data.reward_fn_key
-        )
-
-        # Note that we always use function-based RM for validation
-        val_reward_fn = reward_manager_cls(
-            tokenizer=tokenizer,
-            num_examine=1,
-            compute_score=compute_score,
-            reward_fn_key=config.data.reward_fn_key
-        )
 
         # reference model
         if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
             role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
             mapping[Role.RefPolicy] = global_pool_id
 
+        from verl.workers.reward_manager import get_reward_manager_cls
+
+        # Note(haibin.lin): please make sure custom reward managers are imported and
+        # registered via `verl.workers.reward_manager.register`
+        reward_manager_name = config.reward_model.get("reward_manager", "naive")
+        reward_manager_cls = get_reward_manager_cls(reward_manager_name)
+
+        compute_score = get_custom_reward_fn(config)
+        reward_fn = reward_manager_cls(
+            tokenizer=tokenizer,
+            num_examine=0,
+            compute_score=compute_score
+        )
+        # reward_fn_key=config.data.reward_fn_key,
+        # max_resp_len=config.data.max_response_length,
+        # overlong_buffer_cfg=config.reward_model.overlong_buffer,
+
+        # Note that we always use function-based RM for validation
+        val_reward_fn = reward_manager_cls(
+            tokenizer=tokenizer,
+            num_examine=1,
+            compute_score=compute_score,
+        )
+        
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
         trainer = RayDanceGRPOTrainer(
