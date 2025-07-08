@@ -49,10 +49,35 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
 
         select_keys=["timesteps", "latents", "next_latents", "log_probs","contexts","sigma_schedule","advantages"]
         non_tensor_select_keys = ["caption"]
+
+        # Split to make minibatch iterator for updating the actor
+        # See PPO paper for details. https://arxiv.org/abs/1707.06347
+        
+        # from tensordict import TensorDict
+
+        # batch = TensorDict()
+        # for k, v in data.batch.items():
+        #     if isinstance(v, torch.Tensor):
+        #         batch[k] = v.unsqueeze(1)  # 添加一维，保持 [B, 1, ...] 结构
+        # batch.batch_size=data.batch.batch_size
+
+
+        # 合并到 data 中（假设 DataProto 接收一个包含 batch 的 dict）
+        # data.batch=batch
         
         dataloader = data.select(select_keys, non_tensor_select_keys).chunk(data.batch.batch_size[0])
 
         for batch_idx, data in enumerate(dataloader):
+            mini_batch = data
+
+            self.gradient_accumulation = (
+                self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
+            )
+            # split batch into micro_batches
+            micro_batches = mini_batch.chunk(self.config.ppo_micro_batch_size_per_gpu)
+
+            self.actor_optimizer.zero_grad()
+            context=[data.batch["contexts"].squeeze(0)]
             for step_idx in range(train_timesteps):
                 clip_range = self.config.clip_range
                 adv_clip_max = self.config.adv_clip_max
@@ -61,11 +86,11 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                 seq_len = math.ceil(
                     (latent_shape[3] * latent_shape[4]) / (2 * 2) * latent_shape[2]
                 )
-
+                
                 new_log_probs = self.grpo_wan_one_step(
                     data.batch["latents"][:, step_idx],
                     data.batch["next_latents"][:, step_idx],
-                    [data.batch["contexts"][batch_idx]],  # List[Tensor]格式
+                    context,  # List[Tensor]格式
                     seq_len,
                     self.actor_module,
                     data.batch["timesteps"][:, step_idx],
@@ -88,18 +113,18 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                     1.0 - clip_range,
                     1.0 + clip_range,
                 )
-                loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss)) / (self.config.gradient_accumulation_steps * train_timesteps)
+                loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss)) / (self.gradient_accumulation * train_timesteps)
 
                 loss.backward()
                 avg_loss = loss.detach().clone()
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.AVG)
-                total_loss += avg_loss.item()
+
+                torch.distributed.all_reduce(avg_loss, op=torch.distributed.ReduceOp.AVG)
+                # total_loss += avg_loss.item()
                 
-            if (i + 1) % slef.config.gradient_accumulation_steps == 0:
-                grad_norm = torch.nn.utils.clip_grad_norm_(transformer.parameters(), max_grad_norm)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
+            if (batch_idx + 1) % self.gradient_accumulation == 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_module.parameters(), self.config.max_grad_norm)
+                self.actor_optimizer.step()
+                self.actor_optimizer.zero_grad()
 
     def grpo_wan_one_step(
         self,
@@ -128,8 +153,7 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
         
         # 使用适当的数据类型进行autocast
         autocast_dtype = torch.float16
-        print(timesteps.shape)
-        print("+"*100)
+        # print("[DEBUG],157",context[0].shape)
         with torch.autocast("cuda", dtype=autocast_dtype):
             pred = transformer(
                 x=[latents],

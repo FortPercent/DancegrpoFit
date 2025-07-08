@@ -219,16 +219,17 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 unwrap_model = self.model
 
             model_config = unwrap_model.config
-            if unwrap_model.can_generate() and hasattr(model_config, "name_or_path") and model_config.name_or_path:
-                # Some model's name_or_path is empty if not initialized from pretrained,
-                # in this cases, we don't save generation config.
-                generation_config = GenerationConfig.from_pretrained(model_config.name_or_path)
-                generation_config.save_pretrained(local_path)
-            else:
-                generation_config = None
+            #TODO
+            # if unwrap_model.can_generate() and hasattr(model_config, "name_or_path") and model_config.name_or_path:
+            #     # Some model's name_or_path is empty if not initialized from pretrained,
+            #     # in this cases, we don't save generation config.
+            #     generation_config = GenerationConfig.from_pretrained(model_config.name_or_path)
+            #     generation_config.save_pretrained(local_path)
+            # else:
+            #     generation_config = None
 
-            model_config.save_pretrained(local_path)
-            self.processing_class.save_pretrained(local_path)
+            # model_config.save_pretrained(local_path)
+            # self.processing_class.save_pretrained(local_path)
             log_with_rank(f"Saved model config and tokenizer class to {os.path.abspath(local_path)}", rank=self.rank, logger=logger, log_only_rank_0=True)
 
         # wait for everyone to dump to local

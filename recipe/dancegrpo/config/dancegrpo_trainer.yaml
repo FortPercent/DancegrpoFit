@@ -22,6 +22,7 @@ actor_rollout_ref:
     clip_range: 1e-4
     adv_clip_max: 5.0
     eta: 0.3
+    max_grad_norm: 1.0
   cfg: 0.0
   h: 720
   w: 720

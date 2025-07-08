@@ -25,7 +25,7 @@ max_num_gen_batches=10
 train_prompt_bsz=1
 gen_prompt_bsz=$((train_prompt_bsz * 3))
 n_resp_per_prompt=12
-train_prompt_mini_bsz=4
+train_prompt_mini_bsz=1
 
 # Ray
 WORKING_DIR=${WORKING_DIR:-"${PWD}"}
@@ -47,7 +47,7 @@ val_top_p=0.7
 
 # Performance Related Parameter
 sp_size=1
-use_dynamic_bsz=True
+use_dynamic_bsz=False
 actor_ppo_max_token_len=$((max_prompt_length + max_response_length))
 infer_ppo_max_token_len=$((max_prompt_length + max_response_length))
 offload=True
@@ -118,6 +118,8 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     actor_rollout_ref.ref.fsdp_config.param_offload=${offload} \
     actor_rollout_ref.ref.ulysses_sequence_parallel_size=${sp_size} \
     actor_rollout_ref.actor.fsdp_config.fsdp_size=-1 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
     reward_model.enable=True \
     reward_model.model.path='./model/HPS_v2.1_compressed.pt' \
     reward_model.micro_batch_size_per_gpu=1 \
