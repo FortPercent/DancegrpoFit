@@ -69,6 +69,7 @@ class DiffusionRollout(BaseRollout):
         context=prompts.batch['context']
         context_orig_lengths = prompts.batch['context_orig_lengths']
         caption=prompts.non_tensor_batch['caption']
+        neg_context = prompts.batch['null_context']
 
         B = len(caption)
         
@@ -103,6 +104,7 @@ class DiffusionRollout(BaseRollout):
         for index, batch_idx in enumerate(batch_indices):
             batch_captions = [caption[i] for i in batch_idx]
             batch_contexts = [context[i].to(get_device_id()) for i in batch_idx]
+            batch_neg_context = [neg_context[i].to(get_device_id()) for i in batch_idx]
             batch_context_orig_lengths = [context_orig_lengths[i] for i in batch_idx]
 
             for i in range(len(batch_contexts)):
@@ -131,6 +133,7 @@ class DiffusionRollout(BaseRollout):
                     sigma_schedule,
                     self.module,
                     batch_contexts,
+                    batch_neg_context,
                     seq_len,
                     grpo_sample,
                 )
@@ -296,6 +299,7 @@ class DiffusionRollout(BaseRollout):
         sigma_schedule,  # 添加sigma_schedule
         transformer,
         context,
+        neg_context,
         seq_len,
         grpo_sample,
     ):
@@ -315,28 +319,53 @@ class DiffusionRollout(BaseRollout):
                 timestep_value = int(sigma * 1000)
                 timestep = torch.full([B], timestep_value, device=device, dtype=torch.long)
                 
+                timestep_cond = timestep
+                timestep_uncond = timestep
                 transformer.eval()
                 with torch.autocast("cuda", torch.float32):
                     # WAN模型输入：x是(C,T,H,W)格式的列表
 
                     #TODO!!!!
-                    #管理!!!
-                    transformer.to(device)
+                    #管理!!!有hook!!!
 
-                    pred = transformer(
-                        x=latents,  # [tensor(16, 7, 64, 64)]
-                        t=timestep,
+                    transformer.to(device)
+                    pred_cond = transformer(
+                        x=latents,  # [(16, 7, 64, 64)]
+                        t=timestep_cond,
                         context=context,
                         seq_len=seq_len
                     )
                     
                     # 处理模型输出
-                    if isinstance(pred, dict) and 'rgb' in pred:
-                        model_output = pred['rgb'][0]
-                    elif isinstance(pred, list):
-                        model_output = pred[0]
+                    if isinstance(pred_cond, dict) and 'rgb' in pred_cond:
+                        model_output_cond = pred_cond['rgb'][0]
+                    elif isinstance(pred_cond, list):
+                        model_output_cond = pred_cond[0]
                     else:
-                        model_output = pred
+                        model_output_cond = pred_cond
+
+                    # 为无条件预测准备输入
+                    transformer.to(device)
+                    pred_uncond = transformer(
+                        x=latents,  # [(16, 7, 64, 64)]
+                        t=timestep_uncond,
+                        context=neg_context,
+                        seq_len=seq_len
+                    )
+
+                    if isinstance(pred_uncond, dict) and 'rgb' in pred_uncond:
+                        model_output_uncond = pred_uncond['rgb'][0]
+                    elif isinstance(pred_uncond, list):
+                        model_output_uncond = pred_uncond[0]
+                    else:
+                        model_output_uncond = pred_uncond
+                        
+                    del pred_cond, pred_uncond
+
+                    # CFG组合
+                    model_output = model_output_uncond + self.config.guide_scale * (model_output_cond - model_output_uncond)
+                    del model_output_cond, model_output_uncond
+                    torch.cuda.empty_cache()
 
                 # WAN的SDE采样步骤
                 next_latents, pred_original, log_prob = self.wan_step(

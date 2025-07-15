@@ -32,6 +32,7 @@ from verl.utils.ulysses import (
     get_ulysses_sequence_parallel_group,
     get_ulysses_sequence_parallel_world_size,
     slice_input_tensor,
+    gather_outpus_and_unpad
 )
 
 
@@ -143,10 +144,10 @@ def patch_diffusion_for_ulysses_input_slicing(model: type):
     Applies a monkey patch to the `blocks.forward` method of a given diffusion model class
     to enable Ulysses sequence parallelism input slicing.
     """
+    from .wan import set_pad_size
 
     def _create_ulysses_wrapped_block_forward(original_forward):
-        print("begin to adaot")
-        def ulysses_wrapped_block_forward(self, *args, **kwargs):
+        def ulysses_wrapped_block_forward(*args, **kwargs):
             x = kwargs.get("x")
             
             current_ulysses_sp_size = get_ulysses_sequence_parallel_world_size()
@@ -154,12 +155,12 @@ def patch_diffusion_for_ulysses_input_slicing(model: type):
             if slice_now:
                 total_seq_len = x.shape
                 pad_size = (current_ulysses_sp_size - total_seq_len[1] % current_ulysses_sp_size) % current_ulysses_sp_size
+                set_pad_size(pad_size)
                 x = torch.nn.functional.pad(x, (0, 0, 0, pad_size), value=0)
                 x_sliced = slice_input_tensor(x, dim=1, padding=False)
                 kwargs["x"] = x_sliced
-
             try:
-                return original_forward(self, *args, **kwargs)
+                return original_forward(*args, **kwargs)
             finally:
                 pass  # 可以在这里加清理逻辑或状态恢复
 
@@ -170,15 +171,55 @@ def patch_diffusion_for_ulysses_input_slicing(model: type):
         # 确保 model_class 实例有 .blocks 属性
         # 所以我们要 monkey patch 的是 block 的 forward，而不是 model_class.blocks.forward
         # 因此我们需要先实例化模型再做 patch，或者 patch ModuleList 中每个 block 的 forward
-        print(model_class)
-        print("-="*10)
-        original_forward = model.blocks[0].forward
-        model.blocks[0].forward = _create_ulysses_wrapped_block_forward(original_forward)
+        new_forward=_create_ulysses_wrapped_block_forward(model.blocks[0].forward)
 
+        model.blocks[0].forward = new_forward
 
         print(f"Monkey patched {model}.blocks.forward for Ulysses SP input slicing.")
     except Exception as e:
         print(f"Failed to patch {model}: {e}")
+    
+
+def patch_diffusion_for_ulysses_head_gather(model: type):
+    """
+    Applies a monkey patch to the `blocks.forward` method of a given diffusion model class
+    to enable Ulysses sequence parallelism input slicing.
+    """
+    from .wan import get_pad_size
+    def _create_ulysses_wrapped_block_forward(original_forward):
+        print("begin to patch_diffusion_for_ulysses_head_gather")
+        def ulysses_wrapped_block_forward(self,*args, **kwargs):
+            x = kwargs.get("x")
+            
+            current_ulysses_sp_size = get_ulysses_sequence_parallel_world_size()
+            slice_now = x is not None and current_ulysses_sp_size > 1
+            if slice_now:
+                # total_seq_len = x.shape
+                # pad_size = (current_ulysses_sp_size - total_seq_len[1] % current_ulysses_sp_size) % current_ulysses_sp_size
+                # x = torch.nn.functional.pad(x, (0, 0, 0, pad_size), value=0)
+
+                pad_size=get_pad_size()
+                x_sliced = gather_outpus_and_unpad(x,  gather_dim=1, unpad_dim=1, padding_size=pad_size)
+                kwargs["x"] = x_sliced
+
+            try:
+                return original_forward(self,*args, **kwargs)
+            finally:
+                pass  # 可以在这里加清理逻辑或状态恢复
+
+        return ulysses_wrapped_block_forward
+
+    # Monkey patch the forward method of blocks in the model class
+    try:
+        # 确保 model_class 实例有 .blocks 属性
+        # 所以我们要 monkey patch 的是 block 的 forward，而不是 model_class.blocks.forward
+        # 因此我们需要先实例化模型再做 patch，或者 patch ModuleList 中每个 block 的 forward
+        original_forward = model.Head.forward
+        model.Head.forward = _create_ulysses_wrapped_block_forward(original_forward)
+
+        print(f"Monkey patched {model.__name__}.head.forward for Ulysses SP input slicing.")
+    except Exception as e:
+        print(f"Failed to patch {model.__name__}: {e}")
 
 def patch_forward_with_backends(
     model: PreTrainedModel,
@@ -239,6 +280,7 @@ def apply_monkey_patch(
     """
 
     """Replace _flash_attention_forward to _ulysses_flash_attention_forward"""
+    module = sys.modules[model.__module__]
     try:
         num_attention_heads = model.config.num_heads
     except AttributeError:
@@ -266,11 +308,12 @@ def apply_monkey_patch(
         # from wan.modules.model import WanModel
         if ulysses_sp_size > 1:
             patch_diffusion_for_ulysses_input_slicing(model)
+            patch_diffusion_for_ulysses_head_gather(module)
 
             from wan.modules.model import WanSelfAttention,WanI2VCrossAttention
             from .wan import ulysses_self_flash_attn_forward
 
-            module.WanSelfAttention.forward = ulysses_self_flash_attn_forward
+            WanSelfAttention.forward = ulysses_self_flash_attn_forward
             # WanI2VCrossAttention.forward = ulysses_cross_flash_attn_forward
         return
     # TODO: VLM models only, unify monkey patch to LLM models.

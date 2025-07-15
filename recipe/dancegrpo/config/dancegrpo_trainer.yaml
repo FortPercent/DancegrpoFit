@@ -23,6 +23,7 @@ actor_rollout_ref:
     adv_clip_max: 5.0
     eta: 0.3
     max_grad_norm: 1.0
+  guide_scale: 5.0
   cfg: 0.0
   h: 720
   w: 720

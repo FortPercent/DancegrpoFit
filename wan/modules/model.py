@@ -147,7 +147,6 @@ class WanSelfAttention(nn.Module):
 
         q, k, v = qkv_fn(x)
         #TODO gather
-        print("*"*10,q.shape)
 
         x = flash_attention(
             q=rope_apply(q, grid_sizes, freqs),
@@ -577,24 +576,10 @@ class WanModel(ModelMixin, ConfigMixin):
             context=context,
             context_lens=context_lens)
         
-        from verl.utils.ulysses import (
-            gather_heads_scatter_seq,
-            gather_seq_scatter_heads,
-            get_ulysses_sequence_parallel_group,
-            get_ulysses_sequence_parallel_world_size,
-            slice_input_tensor,
-        )
-        current_ulysses_sp_size = get_ulysses_sequence_parallel_world_size()
-        total_seq_len = x.shape
-        pad_size = (current_ulysses_sp_size - total_seq_len[1] % current_ulysses_sp_size) % current_ulysses_sp_size
-        x = torch.nn.functional.pad(x, (0, 0, 0, pad_size), value=0)
-        x_sliced = slice_input_tensor(x, dim=1, padding=False)
         for block in self.blocks:
             x = block(x=x, **kwargs)
 
-        # head
-        x = self.head(x, e)
-
+        x = self.head(x=x, e=e)
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
         return [u.float() for u in x]

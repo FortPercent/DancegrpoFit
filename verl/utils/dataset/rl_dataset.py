@@ -171,7 +171,7 @@ class RLHFDataset(Dataset):
         
         with open(self.json_path, 'r', encoding='utf-8') as f:
             self.data = json.load(f)  # 通常是 List[Dict]
-        
+
         # 正确传入 Dataset.from_list
         self.dataframe = Dataset.from_list(self.data)
 
@@ -262,9 +262,11 @@ class RLHFDataset(Dataset):
         if self.config.type=="diffusion":
             # 加载numpy文件并转换为tensor
             context_numpy = np.load(row_dict['context_path'])
+            null_context_numpy = np.load(row_dict['context_null_path'])
             context = torch.from_numpy(context_numpy)  # shape: (L, C)
-            print(row_dict['context_path'],context.shape)
+            null_context = torch.from_numpy(null_context_numpy)  # shape: (L, C)
             row_dict['context']=context
+            row_dict['null_context']=null_context
         else:
             if self.processor is not None:
                 from verl.utils.dataset.vision_utils import process_image, process_video

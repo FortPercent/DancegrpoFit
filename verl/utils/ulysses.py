@@ -76,13 +76,11 @@ def gather_seq_scatter_heads(
     if not group:
         return x
     sp_world = get_ulysses_sequence_parallel_world_size(group)
-    print(x.shape,"1"*10)
+
     x = SeqAllToAll.apply(group, x, head_dim, seq_dim)
-    print(x.shape,sp_world)
+
     if unpadded_dim_size and unpadded_dim_size % sp_world != 0:
-        print("[DEBUG]","+"*10,x.size(seq_dim),unpadded_dim_size)
         padding_size = x.size(seq_dim) - unpadded_dim_size
-        print(padding_size,"padding_size")
         x = _unpad_tensor(x, seq_dim, padding_size)
     return x
 

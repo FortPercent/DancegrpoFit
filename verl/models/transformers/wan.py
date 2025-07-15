@@ -40,7 +40,6 @@ def ulysses_self_flash_attn_forward(
 ):
     from wan.modules.model import rope_apply
     attention_mask=None
-    print("come to ulysses_self_flash_attn_forward")
     # bsz, q_len, _ = x.size()  # q_len = seq_length / sp_size
     b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
     ulysses_sp_size = get_ulysses_sequence_parallel_world_size()
@@ -58,9 +57,6 @@ def ulysses_self_flash_attn_forward(
         validate_ulysses_config(self.num_heads, ulysses_sp_size)
         # key_states = repeat_kv(key_states, self.num_key_value_groups)
         # value_states = repeat_kv(value_states, self.num_key_value_groups)
-        print(q.shape,"BEFORE")
-        print(k.shape,"k BEFORE")
-        print(v.shape,"v BEFORE")
         target = f*h*w
         q = gather_seq_scatter_heads(q, seq_dim=1, head_dim=2,unpadded_dim_size=target)
         k = gather_seq_scatter_heads(k, seq_dim=1, head_dim=2,unpadded_dim_size=target)
@@ -82,7 +78,6 @@ def ulysses_self_flash_attn_forward(
 
     import torch.nn.functional as F
     torch.backends.cuda.enable_cudnn_sdp(False)
-    print("q/shape",q.shape,ulysses_sp_size)
     #unpad 
 
     q=rope_apply(q, grid_sizes, freqs)
@@ -102,7 +97,16 @@ def ulysses_self_flash_attn_forward(
 
     if ulysses_sp_size > 1:
         attn_output = gather_heads_scatter_seq(attn_output, head_dim=1, seq_dim=2)
-    print("attn_output/shape",attn_output.shape)
+
     attn_output = attn_output.transpose(1, 2).flatten(2, 3).contiguous()
     attn_output = self.o(attn_output)
     return attn_output
+
+_PAD_SIZE = None
+
+def set_pad_size(pad_size):
+    global _PAD_SIZE
+    _PAD_SIZE=pad_size
+
+def get_pad_size():
+    return _PAD_SIZE

@@ -394,7 +394,6 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
             actor_module_fsdp = actor_module
         else:
             raise NotImplementedError(f"not implement {fsdp_strategy}")
-            
         # if enable_activation_offload:
         #     enable_activation_offloading(actor_module_fsdp, fsdp_strategy, enable_gradient_checkpointing)
 
@@ -582,6 +581,7 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
                 role="actor",
                 enable_activation_offload=self.config.model.get("enable_activation_offload", False),
             )
+
 
             # get the original unwrapped module
             if fsdp_version(self.actor_module_fsdp) == 1:
