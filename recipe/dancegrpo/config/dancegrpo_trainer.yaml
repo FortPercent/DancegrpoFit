@@ -1,0 +1,39 @@
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+trainer:
+  type: diffusion
+
+data:
+  type: diffusion
+
+actor_rollout_ref:
+  type: diffusion
+  model:
+    vae_model_path: data/flux
+    data_json_path: data/rl_embeddings/videos2caption.json
+  actor:
+    timestep_fraction: 0.6
+    clip_range: 1e-4
+    adv_clip_max: 5.0
+    eta: 0.3
+    max_grad_norm: 1.0
+  guide_scale: 5.0
+  cfg: 0.0
+  h: 720
+  w: 720
+  num_frames: 1
+  sampling_steps: 16
+  lr_warmup_steps: 0
+  use_hpsv2: True
+  shift: 8.0
+  timestep_fraction: 0.6
+  init_same_noise: True
+
+reward_model:
+  type: diffusion
