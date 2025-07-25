@@ -85,13 +85,25 @@ class TaskRunner:
         # - The reward type depends on the tag of the data
         if config.reward_model.enable:
             if config.reward_model.strategy == "fsdp":
-                from .dancegrpo_fsdp_worker import DiffusionRewardModelWorker as RewardModelWorker
+                from .dancegrpo_fsdp_worker import DiffusionRewardModelWorker, AestheticRewardModelWorker, RAFTRewardModelWorker, VideoclipRewardModelWorker, VideophyRewardModelWorker
             elif config.reward_model.strategy == "megatron":
                 from verl.workers.megatron_workers import RewardModelWorker
             else:
                 raise NotImplementedError
-            role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
+            role_worker_mapping[Role.RewardModel] = ray.remote(DiffusionRewardModelWorker)
             mapping[Role.RewardModel] = global_pool_id
+            
+            role_worker_mapping[Role.AestheticRewardModel] = ray.remote(AestheticRewardModelWorker)
+            mapping[Role.AestheticRewardModel] = global_pool_id
+            
+            role_worker_mapping[Role.RAFTRewardModel] = ray.remote(RAFTRewardModelWorker)
+            mapping[Role.RAFTRewardModel] = global_pool_id
+            
+            role_worker_mapping[Role.VideoclipRewardModel] = ray.remote(VideoclipRewardModelWorker)
+            mapping[Role.VideoclipRewardModel] = global_pool_id
+            
+            role_worker_mapping[Role.VideophyRewardModel] = ray.remote(VideophyRewardModelWorker)
+            mapping[Role.VideophyRewardModel] = global_pool_id
 
         # reference model
         if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:

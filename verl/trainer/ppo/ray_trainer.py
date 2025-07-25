@@ -73,7 +73,11 @@ class Role(Enum):
     Critic = 3
     RefPolicy = 4
     RewardModel = 5
-    ActorRolloutRef = 6
+    AestheticRewardModel = 6
+    RAFTRewardModel = 7
+    VideoclipRewardModel = 8
+    VideophyRewardModel = 9
+    ActorRolloutRef = 10
 
 
 @dataclass
@@ -755,7 +759,16 @@ class RayPPOTrainer:
             # we create a RM here
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RewardModel)
             rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
+            aes_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.AestheticRewardModel], config=self.config.reward_model)
+            raft_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RAFTRewardModel], config=self.config.reward_model)
+            videoclip_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.VideoclipRewardModel], config=self.config.reward_model)
+            videophy_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.VideophyRewardModel], config=self.config.reward_model)
+            
             self.resource_pool_to_cls[resource_pool]["rm"] = rm_cls
+            self.resource_pool_to_cls[resource_pool]["aes_rm"] = aes_rm_cls
+            self.resource_pool_to_cls[resource_pool]["raft_rm"] = raft_rm_cls
+            self.resource_pool_to_cls[resource_pool]["videoclip_rm"] = videoclip_rm_cls
+            self.resource_pool_to_cls[resource_pool]["videophy_rm"] = videophy_rm_cls
 
         # initialize WorkerGroup
         # NOTE: if you want to use a different resource pool for each role, which can support different parallel size,
@@ -788,6 +801,16 @@ class RayPPOTrainer:
         if self.use_rm:
             self.rm_wg = all_wg["rm"]
             self.rm_wg.init_model()
+            
+            self.aes_rm_wg = all_wg.get("aes_rm")
+            self.raft_rm_wg = all_wg.get("raft_rm")
+            self.videoclip_rm_wg = all_wg.get("videoclip_rm")
+            self.videophy_rm_wg = all_wg.get("videophy_rm")
+            
+            self.aes_rm_wg.init_model() 
+            self.raft_rm_wg.init_model()
+            self.videoclip_rm_wg.init_model()
+            self.videophy_rm_wg.init_model()
 
         # we should create rollout at the end so that vllm can have a better estimation of kv cache memory
         self.actor_rollout_wg = all_wg["actor_rollout"]
@@ -1026,6 +1049,7 @@ class RayPPOTrainer:
                         # compute reward model score
                         if self.use_rm:
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
+                            
                             batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:

@@ -164,6 +164,11 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                             # Calculate the HPS
                             with torch.amp.autocast('cuda'):
                                 reward_tensor = self.rm_wg.compute_rm_score(gen_batch_output)
+                                aes_reward_tensor = self.aes_rm_wg.compute_aes_score(gen_batch_output)
+                                raft_reward_tensor = self.raft_rm_wg.compute_raft_score(gen_batch_output)
+                                videoclip_reward_tensor = self.videoclip_rm_wg.compute_videoclip_score(gen_batch_output)
+                                videophy_reward_tensor = self.videophy_rm_wg.compute_videophy_score(gen_batch_output)
+                                
                                 new_batch = gen_batch_output.union(reward_tensor)
                                 del gen_batch_output
 
