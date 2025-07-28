@@ -838,6 +838,22 @@ class DataProto:
             meta_info=self.meta_info,
         )
 
+    def print_data_proto(self, name="reward_tensor"):
+        print(f"\n==== {name} 内容 ====")
+
+        print("\n[batch]:")
+        for k, v in self.batch.items():
+            print(f"  - {k}: type={type(v)}, shape={v.shape}, dtype={v.dtype}")
+            print(f"    value={v if v.numel() < 10 else v.flatten()[:10]}{' ...' if v.numel() > 10 else ''}")
+
+        print("\n[non_tensor_batch]:")
+        for k, v in self.non_tensor_batch.items():
+            print(f"  - {k}: type={type(v)}, value={v}")
+
+        print("\n[meta_info]:")
+        for k, v in self.meta_info.items():
+            print(f"  - {k}: type={type(v)}, value={v}")
+
 
 @dataclass
 class DataProtoFuture:

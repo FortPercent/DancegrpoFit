@@ -416,7 +416,7 @@ class DiffusionRewardModelWorker(RewardModelWorker):
         from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
         # Support all hardwares
         datas=data.pop(
-            batch_keys=['D'],
+            batch_keys=['video_frames'],
             non_tensor_batch_keys=["caption"],
         )
         decoded_image=datas.batch['video_frames']
@@ -506,8 +506,8 @@ class AestheticRewardModelWorker(RewardModelWorker):
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
         # 读取数据，但是不删除
-        datas = data.get(
-            batch_keys=['D'],
+        datas=data.pop(
+            batch_keys=['video_frames'],
             non_tensor_batch_keys=["caption"],
         )
         # # (B, C, H, W)
@@ -627,8 +627,8 @@ class RAFTRewardModelWorker(RewardModelWorker):
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
         # 读取数据，但是不删除
-        datas = data.get(
-            batch_keys=['D'],
+        datas=data.pop(
+            batch_keys=['video_frames'],
             non_tensor_batch_keys=["caption"],
         )
         # # (B, C, H, W)
@@ -730,8 +730,8 @@ class VideoclipRewardModelWorker(RewardModelWorker):
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
         # 读取数据，但是不删除
-        datas = data.get(
-            batch_keys=['D'],
+        datas=data.pop(
+            batch_keys=['video_frames'],
             non_tensor_batch_keys=["caption"],
         )
         # (B, C, Frame, H, W)
@@ -1055,8 +1055,8 @@ class VideophyRewardModelWorker(RewardModelWorker):
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
         # 读取数据，但是不删除
-        datas = data.get(
-            batch_keys=['D'],
+        datas=data.pop(
+            batch_keys=['video_frames'],
             non_tensor_batch_keys=["caption"],
         )
         # (B, C, Frame, H, W)
