@@ -1,3 +1,5 @@
+*.npy
+**/*.npy
 
 **/*.pt
 **/checkpoints
@@ -8,6 +10,7 @@
 **/*.tar.gz
 **/playground
 **/wandb
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -166,15 +166,19 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                             with torch.amp.autocast('cuda'):
 
                                 # pop操作在RewardModelWorker内部进行，不会对datas产生影响
-                                reward_tensor = self.rm_wg.compute_rm_score(datas)
+                                # reward_tensor = self.rm_wg.compute_rm_score(gen_batch_output)
+                        
+                                aes_reward_tensor = self.aes_rm_wg.compute_rm_score(gen_batch_output)
+                                raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
+                                videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
+                                videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)
                                 
+                                aes_reward_tensor.print_data_proto("aes_reward")
+                                raft_reward_tensor.print_data_proto("raft_reward")
+                                videoclip_reward_tensor.print_data_proto("videoclip_reward")
+                                videophy_reward_tensor.print_data_proto("videophy_reward")
                                 
-                                aes_reward_tensor = self.aes_rm_wg.compute_aes_score(datas)
-                                raft_reward_tensor = self.raft_rm_wg.compute_raft_score(datas)
-                                videoclip_reward_tensor = self.videoclip_rm_wg.compute_videoclip_score(datas)
-                                videophy_reward_tensor = self.videophy_rm_wg.compute_videophy_score(datas)
-                                
-                                new_batch = gen_batch_output.union(reward_tensor)
+                                # new_batch = gen_batch_output.union(reward_tensor)
                                 new_batch.union(aes_reward_tensor)
                                 new_batch.union(raft_reward_tensor)
                                 new_batch.union(videoclip_reward_tensor)

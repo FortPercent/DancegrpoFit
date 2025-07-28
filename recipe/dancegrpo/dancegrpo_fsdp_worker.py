@@ -491,15 +491,9 @@ class AestheticRewardModelWorker(RewardModelWorker):
         return m
     
     def _build_model(self, config):
-        # the following line is necessary
-        from transformers import AutoConfig, AutoModelForTokenClassification, GPT2Config
-
-        use_shm = config.model.get("use_shm", False)
-        # download the checkpoint from hdfs
-        local_path = copy_to_local(config.model.path, use_shm=use_shm)
         
         from verl.models.offline_clip import create_offline_clip_model
-        self.clip_mode = create_offline_clip_model(self.clip_model_path).to(device=get_device_id())
+        self.clip_mode = create_offline_clip_model(self.clip_model_path, "cpu")
         self.aesthetic_model = self._load_aesthetic_model(self.aes_model_path)
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
@@ -536,7 +530,7 @@ class AestheticRewardModelWorker(RewardModelWorker):
         all_rewards = []
         for index, batch_idx in enumerate(batch_indices):
             with torch.no_grad():
-                transformed = torch.stask([transform(image) for image in decoded_images[index]])
+                transformed = torch.stack([transform(image) for image in decoded_images[index]])
                 transformed = transformed.to(device=get_device_id()).to(device=get_device_id())
                 self.clip_mode.to(device=get_device_id())
                 self.aesthetic_model.to(device=get_device_id())
@@ -546,7 +540,8 @@ class AestheticRewardModelWorker(RewardModelWorker):
                 score = self.aesthetic_model(features).squeeze(-1)
                 
             mean_score = (score / 10).mean().item()
-            all_rewards.append(mean_score)
+            print(f"mean_score value: {mean_score}")
+            all_rewards.append(torch.tensor(mean_score, device=get_device_id()).unsqueeze(0))
             
         all_rewards = torch.cat(all_rewards, dim=0)
         all_rewards = all_rewards.to(torch.device('cpu'))
@@ -573,19 +568,14 @@ class RAFTRewardModelWorker(RewardModelWorker):
     """
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def init_model(self, stride: int = 10):
+    def init_model(self, stride: int = 1):
         self.raft_model_path = "/nvfile-heatstorage/liangyzh/code/evalcrafter/EvalCrafter/checkpoints/RAFT/models/raft-things.pth"
         # self.raft_model = self._load_raft_model(self.raft_model_path)
         self.stride = stride
         self._build_model(config=self.config)
     
     def _build_model(self, config):
-        from transformers import AutoConfig, AutoModelForTokenClassification, GPT2Config
 
-        use_shm = config.model.get("use_shm", False)
-        # download the checkpoint from hdfs
-        local_path = copy_to_local(config.model.path, use_shm=use_shm)
-        
         args_dict = {
             "small": False,
             "mixed_precision": False,
@@ -595,8 +585,18 @@ class RAFTRewardModelWorker(RewardModelWorker):
         
         from verl.models.raft.raft import RAFT
         model = RAFT(args)
-        model.load_state_dict(torch.load(self.raft_model_path, map_location=get_device_id())) 
-        self.raft_model = model.module.to(device=get_device_id())
+        
+        from collections import OrderedDict
+        # 去除 "module." 前缀
+        state_dict = torch.load(self.raft_model_path, map_location="cpu")
+        new_state_dict = OrderedDict()
+
+        for k, v in state_dict.items():
+            name = k[7:] if k.startswith("module.") else k  # remove 'module.'
+            new_state_dict[name] = v
+        model.load_state_dict(new_state_dict)
+        
+        self.raft_model = model
         self.raft_model.eval()
         self.raft_model.args.mixed_precision = False
 
@@ -648,19 +648,23 @@ class RAFTRewardModelWorker(RewardModelWorker):
         decoded_images = [x.permute(1, 0, 2, 3) for x in decoded_images]
         
         caption = datas.non_tensor_batch['caption']       
-
+        
         batch_caption = np.array_split(caption, datas.batch.batch_size[0])
         batch_caption = [str(x.squeeze(0)) for x in batch_caption]
         batch_indices = torch.chunk(torch.arange(len(batch_caption)), len(batch_caption))
         
+        self.raft_model.to(get_device_id())
         all_rewards = []
         for index, batch_idx in enumerate(batch_indices):
-            video = decoded_images[list(range(0, len(decoded_images[index]), self.stride))]
+            video = decoded_images[index][::self.stride]
+            print(f"video shape: {video.shape[0]}")
             video = video.to(get_device_id())    
-            flow_score = self.calcaulate_flow_score_from_tensor(video)
-        
-            all_rewards.append(flow_score)
-        all_rewards = torch.cat(all_rewards, dime=0)
+            flow_score = self.calculate_flow_score_from_tensor(video)
+    
+            print(f"flow_score value: {flow_score}")
+            all_rewards.append(torch.tensor(flow_score, device=get_device_id()).unsqueeze(0))
+            
+        all_rewards = torch.cat(all_rewards, dim=0)
         all_rewards = all_rewards.to(torch.device('cpu'))
         batch = TensorDict(
             {
@@ -691,12 +695,13 @@ class VideoclipRewardModelWorker(RewardModelWorker):
         
     def _build_model(self, config):
         from verl.models.VideoCLIP_XL.modeling import VideoCLIP_XL
+        # 需要适配videoCLIP_XL中vision_model frame 配置
         self.videoclip_model = VideoCLIP_XL()
         state_dict = torch.load(self.videoclip_model_path, map_location="cpu")
         self.videoclip_model.load_state_dict(state_dict)
         # self.videoclip_model.to(get_device_id).eval()
 
-    def _video_preprocessing(self, frames: torch.Tensor, fnum=2):
+    def _video_preprocessing(self, frames: torch.Tensor, fnum=8):
         """
         frames: torch.Tensor, shape [C, T, H, W], e.g. [3, 13, 720, 720]
         输出: torch.Tensor, shape [1, T, C, 224, 224]
@@ -753,10 +758,11 @@ class VideoclipRewardModelWorker(RewardModelWorker):
         for index, batch_idx in enumerate(batch_indices):
             with torch.no_grad():
                 video_inputs = self._video_preprocessing(decoded_images[index]).to(get_device_id())
+                print(f"video_inputs.shape: {video_inputs.shape}")
                 video_features = self.videoclip_model.vision_model.get_vid_features(video_inputs).float()
                 video_features = F.normalize(video_features, dim=-1)
                 
-                text_inputs = text_encoder.tokenize([batch_caption[index]], truncate=True).to(get_device_id)
+                text_inputs = text_encoder.tokenize([batch_caption[index]], truncate=True).to(get_device_id())
                 text_features = self.videoclip_model.text_model.encode_text(text_inputs).float()
 
                 similarity = (video_features @ text_features.T) * 100
@@ -786,18 +792,15 @@ class VideophyRewardModelWorker(RewardModelWorker):
     """
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def init_model(self):
+    def init_model(self, media_tokens = ["<image>", "<|video|>"]):
         self.checkpoint = "/nvfile-heatstorage/liangyzh/interns/zhangxin/videophy/arena-example/videocon_physics"
-        self._build_model(config=self.config) 
+        self.max_length = 256
+        self._build_model(config=self.config)
+        self.media_tokens = {k: -int(i + 1) for i, k in enumerate(media_tokens)}
+        self.media_lengths = {"<image>": 1 + 64, "<|video|>": 1 + 64}        
         
     def _build_model(self, config):
-        # the following line is necessary
-        from transformers import AutoConfig, AutoModelForTokenClassification, GPT2Config
 
-        use_shm = config.model.get("use_shm", False)
-        # download the checkpoint from hdfs
-        local_path = copy_to_local(config.model.path, use_shm=use_shm)
-        
         from transformers.models.llama.tokenization_llama import LlamaTokenizer
         from verl.models.Videophy.mplug_owl_video import MplugOwlForConditionalGeneration
         from verl.models.Videophy.mplug_owl_video import (
@@ -808,7 +811,8 @@ class VideophyRewardModelWorker(RewardModelWorker):
         self.tokenizer = LlamaTokenizer.from_pretrained(self.checkpoint)
         self.videophy_model = MplugOwlForConditionalGeneration.from_pretrained(
             self.checkpoint,
-            torch_dtype=torch.bfloat16
+            torch_dtype=torch.bfloat16,
+            config=MplugOwlConfig.from_pretrained(self.checkpoint)
         )
         self.videophy_model.eval()
         image_processor = MplugOwlImageProcessor.from_pretrained(self.checkpoint)

@@ -158,7 +158,7 @@ class PreciseViTL14(nn.Module):
         return x
 
 
-def load_vit_l14_weights_from_jit(jit_model_path: str, target_device: str = 'cuda:1'):
+def load_vit_l14_weights_from_jit(jit_model_path: str, target_device: str = 'cpu'):
     """
     从JIT模型加载ViT-L-14权重到精确实现
     """
@@ -240,7 +240,7 @@ def load_vit_l14_weights_from_jit(jit_model_path: str, target_device: str = 'cud
     return model, visual_state_dict
 
 
-def create_offline_clip_model(jit_model_path: str, target_device: str = 'cuda:1'):
+def create_offline_clip_model(jit_model_path: str, target_device: str = 'cpu'):
     """
     创建完整的ViT-L-14 CLIP模型
     """

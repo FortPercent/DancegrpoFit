@@ -758,6 +758,7 @@ class RayPPOTrainer:
         if self.use_rm:
             # we create a RM here
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RewardModel)
+            
             rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
             aes_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.AestheticRewardModel], config=self.config.reward_model)
             raft_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RAFTRewardModel], config=self.config.reward_model)
