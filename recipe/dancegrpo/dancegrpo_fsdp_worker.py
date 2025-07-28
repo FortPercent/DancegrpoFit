@@ -1032,10 +1032,10 @@ class VideophyRewardModelWorker(RewardModelWorker):
                 if torch.is_tensor(v):
                     if v.dtype == torch.float:
                         inputs[k] = v.bfloat16()
-                    inputs[k] = inputs[k].to(self.model.device)
+                    inputs[k] = inputs[k].to(self.videophy_model.device)
                     # print(f'{k}: {v.shape}')
             # inputs["videophy_score"] = []
-            outputs = self.model(
+            outputs = self.videophy_model(
                 pixel_values=inputs["pixel_values"],
                 video_pixel_values=inputs["video_pixel_values"],
                 labels=None,
