@@ -106,6 +106,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
             for batch_dict in self.train_dataloader:
                 metrics = {}
 
+
                 new_batch: DataProto = DataProto.from_single_dict(batch_dict)
                 num_gen_batches += 1
                 
