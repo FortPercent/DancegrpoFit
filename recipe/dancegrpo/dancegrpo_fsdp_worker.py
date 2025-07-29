@@ -423,7 +423,7 @@ class DiffusionRewardModelWorker(RewardModelWorker):
         decoded_images = decoded_image.chunk(datas.batch.batch_size[0], dim=0)
         decoded_images = [x.squeeze(0) for x in decoded_images]
         caption=datas.non_tensor_batch['caption']
-
+        import numpy as np
         batch_caption = np.array_split(caption, datas.batch.batch_size[0])
         batch_caption = [str(x.squeeze(0)) for x in batch_caption]
         batch_indices = torch.chunk(torch.arange(len(batch_caption)), len(batch_caption))
@@ -797,7 +797,8 @@ class VideophyRewardModelWorker(RewardModelWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, media_tokens = ["<image>", "<|video|>"]):
-        self.checkpoint = "/nvfile-heatstorage/liangyzh/interns/zhangxin/videophy/arena-example/videocon_physics"
+        # self.checkpoint = "/nvfile-heatstorage/liangyzh/interns/zhangxin/videophy/arena-example/videocon_physics"
+        self.checkpoint = "/root/videocon_physics/videocon_physics"
         self.max_length = 256
         self._build_model(config=self.config)
         self.media_tokens = {k: -int(i + 1) for i, k in enumerate(media_tokens)}

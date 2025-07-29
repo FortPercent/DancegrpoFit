@@ -179,13 +179,12 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                 videophy_reward_tensor.print_data_proto("videophy_reward")
                                 
                                 # new_batch = gen_batch_output.union(reward_tensor)
-                                new_batch.union(aes_reward_tensor)
+                                new_batch = gen_batch_output.union(aes_reward_tensor)
                                 new_batch.union(raft_reward_tensor)
                                 new_batch.union(videoclip_reward_tensor)
                                 new_batch.union(videophy_reward_tensor)
                                 
                                 del gen_batch_output
-                                del datas
                                 
                                 new_batch.print_data_proto("new_batch after reward computation")
 
