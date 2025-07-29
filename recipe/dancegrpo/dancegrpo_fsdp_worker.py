@@ -528,6 +528,7 @@ class AestheticRewardModelWorker(RewardModelWorker):
         transform = clip_transform(224)
         
         all_rewards = []
+        print(f"aes batch size: {len(batch_caption)}")
         for index, batch_idx in enumerate(batch_indices):
             with torch.no_grad():
                 transformed = torch.stack([transform(image) for image in decoded_images[index]])
@@ -540,7 +541,7 @@ class AestheticRewardModelWorker(RewardModelWorker):
                 score = self.aesthetic_model(features).squeeze(-1)
                 
             mean_score = (score / 10).mean().item()
-            print(f"mean_score value: {mean_score}")
+            print(f"aes_score value: {mean_score}")
             all_rewards.append(torch.tensor(mean_score, device=get_device_id()).unsqueeze(0))
             
         all_rewards = torch.cat(all_rewards, dim=0)
@@ -654,6 +655,7 @@ class RAFTRewardModelWorker(RewardModelWorker):
         batch_indices = torch.chunk(torch.arange(len(batch_caption)), len(batch_caption))
         
         self.raft_model.to(get_device_id())
+        print(f"raft batch size: {len(batch_caption)}")
         all_rewards = []
         for index, batch_idx in enumerate(batch_indices):
             video = decoded_images[index][::self.stride]
@@ -755,6 +757,7 @@ class VideoclipRewardModelWorker(RewardModelWorker):
         from verl.models.VideoCLIP_XL.utils.text_encoder import text_encoder
         all_rewards = []
         self.videoclip_model.to(get_device_id()).eval()
+        print(f"videoclip batch size: {len(batch_caption)}")
         for index, batch_idx in enumerate(batch_indices):
             with torch.no_grad():
                 video_inputs = self._video_preprocessing(decoded_images[index]).to(get_device_id())
@@ -767,6 +770,7 @@ class VideoclipRewardModelWorker(RewardModelWorker):
 
                 similarity = (video_features @ text_features.T) * 100
                 similarity = similarity.view(-1)  # 得到 torch.Size([1])
+                print(f"similarity_score value: {similarity}")
             all_rewards.append(similarity)
         
         all_rewards = torch.cat(all_rewards, dim=0)
@@ -809,11 +813,13 @@ class VideophyRewardModelWorker(RewardModelWorker):
         )
         from verl.models.Videophy.mplug_owl_video import MplugOwlConfig        
         self.tokenizer = LlamaTokenizer.from_pretrained(self.checkpoint)
+        print("Model Loading")
         self.videophy_model = MplugOwlForConditionalGeneration.from_pretrained(
             self.checkpoint,
             torch_dtype=torch.bfloat16,
             config=MplugOwlConfig.from_pretrained(self.checkpoint)
         )
+        print("Model Loaded")
         self.videophy_model.eval()
         image_processor = MplugOwlImageProcessor.from_pretrained(self.checkpoint)
         self.processor = MplugOwlProcessor(image_processor, self.tokenizer)
@@ -1025,6 +1031,28 @@ class VideophyRewardModelWorker(RewardModelWorker):
 
         return output_batch
 
+    def get_entail(self, logits, input_ids):
+        softmax = nn.Softmax(dim=2)
+        logits = softmax(logits)
+        token_id_yes = self.tokenizer.encode("Yes", add_special_tokens=False)[0]
+        token_id_no = self.tokenizer.encode("No", add_special_tokens=False)[0]
+        entailment = []
+        for j in range(len(logits)):
+            for i in range(len(input_ids[j])):
+                if (
+                    input_ids[j][i] == self.tokenizer.pad_token_id
+                ):  # pad token if the answer is not present
+                    i = i - 1
+                    break
+                elif i == len(input_ids[j]) - 1:
+                    break
+            score = logits[j][i][token_id_yes] / (
+                logits[j][i][token_id_yes] + logits[j][i][token_id_no]
+            )
+            entailment.append(score)
+        entailment = torch.stack(entailment)
+        return entailment
+
     def get_scores(self, inputs):
         with torch.no_grad():
             # for index, inputs in tqdm(enumerate(dataloader)):
@@ -1032,9 +1060,10 @@ class VideophyRewardModelWorker(RewardModelWorker):
                 if torch.is_tensor(v):
                     if v.dtype == torch.float:
                         inputs[k] = v.bfloat16()
-                    inputs[k] = inputs[k].to(self.videophy_model.device)
+                    inputs[k] = inputs[k].to(get_device_id())
                     # print(f'{k}: {v.shape}')
             # inputs["videophy_score"] = []
+            print("compute videophy")
             outputs = self.videophy_model(
                 pixel_values=inputs["pixel_values"],
                 video_pixel_values=inputs["video_pixel_values"],
@@ -1046,6 +1075,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
                 non_media_mask=inputs["non_media_mask"],
                 prompt_mask=inputs["prompt_mask"],
             )
+            print("compute videophy done")
             logits = outputs["logits"]
             entail_scores = self.get_entail(logits, inputs["input_ids"])
             # print(len(entail_scores))
@@ -1054,6 +1084,24 @@ class VideophyRewardModelWorker(RewardModelWorker):
             # print(f"Batch {index} Done")
             assert len(entail_scores) == 1
         return entail_scores[0].item()
+  
+    def resize_video_frames(self, video_tensor, target_size=(224, 224)):
+        """
+        video_tensor: torch.Tensor, shape [B, C, T, H, W]
+        return: torch.Tensor, shape [B, C, T, 224, 224]
+        """
+        B, C, T, H, W = video_tensor.shape
+        # 把时间帧展平成 batch 维度
+        video_tensor = video_tensor.permute(0, 2, 1, 3, 4)  # [B, T, C, H, W]
+        video_tensor = video_tensor.reshape(B * T, C, H, W)  # [B*T, C, H, W]
+        
+        # 进行 resize
+        resized = F.interpolate(video_tensor, size=target_size, mode='bilinear', align_corners=False)  # [B*T, C, 224, 224]
+        
+        # reshape 回视频形式
+        resized = resized.reshape(B, T, C, *target_size)  # [B, T, C, 224, 224]
+        resized = resized.permute(0, 2, 1, 3, 4)  # [B, C, T, 224, 224]
+        return resized
   
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="brown")
@@ -1065,24 +1113,40 @@ class VideophyRewardModelWorker(RewardModelWorker):
         )
         # (B, C, Frame, H, W)
         decoded_image = datas.batch['video_frames']
-        # List of [(1, C, Frame, H, W),...,...]
+        # [B, C, 224, 224]
+        # Plan A
+        print("start resize video frame")
+        decoded_image = self.resize_video_frames(decoded_image, target_size=(224, 224)) 
+        print("resize video frame done")
+        # List of [(1, C, Frame, 224, 224),...,...]
         decoded_images = decoded_image.chunk(datas.batch.batch_size[0], dim=0)
-        # List of [(C, Frame, H, W),...,...]
+        print("decoded_image.chunk done")
+        # List of [(C, Frame, 224, 224),...,...]
         # decoded_images = [x.squeeze(0) for x in decoded_images]
 
         caption = datas.non_tensor_batch['caption']       
 
         batch_caption = np.array_split(caption, datas.batch.batch_size[0])
         batch_caption = [str(x.squeeze(0)) for x in batch_caption]
+        print("str(x.squeeze(0) done")
         batch_indices = torch.chunk(torch.arange(len(batch_caption)), len(batch_caption))
+        print("torch.chunk(torch.arange(len(batch_caption)) done")
         
-
+        import time
+        start_time = time.time()
+        self.videophy_model.to(get_device_id())
+        load_time = time.time() - start_time
+        print(f"load model time: {load_time}s")
+        
         all_rewards = []
+        print(f"videophy batch size: {len(batch_caption)}")
         for index, batch_idx in enumerate(batch_indices):
             with torch.no_grad():
+                print("start _extract_text_token_from_conversation")
                 text_input = self._extract_text_token_from_conversation(
                     self.max_length, index
                 )
+                print("done _extract_text_token_from_conversation")
                 inputs = {
                     "video": decoded_images[index],
                     "text": text_input,
@@ -1091,7 +1155,9 @@ class VideophyRewardModelWorker(RewardModelWorker):
                 }
                 
                 inputs = self._get_input([inputs])
+                # print(f"inputs: {inputs}")
                 score = self.get_scores(inputs)
+                print(f"videophy_value: {score}")
             all_rewards.append(torch.tensor([score]))
         
         all_rewards = torch.cat(all_rewards, dim=0)
