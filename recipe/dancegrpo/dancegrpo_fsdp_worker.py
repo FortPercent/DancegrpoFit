@@ -726,7 +726,7 @@ class VideoclipRewardModelWorker(RewardModelWorker):
         
         vid_tube = np.concatenate(vid_tube, axis=1)  # (1,T,H,W,C)
         vid_tube = np.transpose(vid_tube, (0, 1, 4, 2, 3))  # (1,T,C,H,W)
-        
+        print(f"vid_tube.shape: {vid_tube.shape}")
         return torch.from_numpy(vid_tube).float()
     
     def _normalize(self, data):
@@ -767,6 +767,7 @@ class VideoclipRewardModelWorker(RewardModelWorker):
                 
                 text_inputs = text_encoder.tokenize([batch_caption[index]], truncate=True).to(get_device_id())
                 text_features = self.videoclip_model.text_model.encode_text(text_inputs).float()
+                text_features = F.normalize(text_features, dim=-1)
 
                 similarity = (video_features @ text_features.T) * 100
                 similarity = similarity.view(-1)  # 得到 torch.Size([1])
@@ -798,7 +799,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, media_tokens = ["<image>", "<|video|>"]):
         # self.checkpoint = "/nvfile-heatstorage/liangyzh/interns/zhangxin/videophy/arena-example/videocon_physics"
-        self.checkpoint = "/root/videocon_physics/videocon_physics"
+        self.checkpoint = "/root/videocon_physics"
         self.max_length = 256
         self._build_model(config=self.config)
         self.media_tokens = {k: -int(i + 1) for i, k in enumerate(media_tokens)}

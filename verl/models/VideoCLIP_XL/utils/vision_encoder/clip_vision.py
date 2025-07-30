@@ -166,8 +166,8 @@ class VisionTransformer(nn.Module):
                 # This is a workaround for unused parameter issue
                 x = x + self.temporal_positional_embedding.mean(1)
             else:
-                print(f"x.shape = {x.shape}")
-                print(f"temporal_positional_embedding.shape = {self.temporal_positional_embedding.shape}")                
+                print(f"x.shape: {x.shape}")
+                print(f"temporal_positional_embedding.shape: {self.temporal_positional_embedding.shape}")                
                 x = x + self.temporal_positional_embedding
         x = rearrange(x, '(b n) t m -> b (n t) m', b=B, t=T)
 
