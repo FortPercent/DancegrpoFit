@@ -43,6 +43,7 @@ class TaskRunner:
         from verl.utils import hf_processor, hf_tokenizer
         import os
         # processor =None
+        print(f"local_path: {local_path}")
         tokenizer_path = os.path.join(local_path, "google/umt5-xxl")
         tokenizer = hf_tokenizer(tokenizer_path)
         processor = hf_processor(local_path, use_fast=True)  # used for multimodal LLM, could be none

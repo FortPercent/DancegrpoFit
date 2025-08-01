@@ -173,19 +173,52 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                 videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
                                 videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)
                                 
-                                aes_reward_tensor.print_data_proto("aes_reward")
-                                raft_reward_tensor.print_data_proto("raft_reward")
-                                videoclip_reward_tensor.print_data_proto("videoclip_reward")
-                                videophy_reward_tensor.print_data_proto("videophy_reward")
-                                
+                                # # 打印测评分数
+                                # aes_reward_tensor.print_data_proto("aes_reward")
+                                # raft_reward_tensor.print_data_proto("raft_reward")
+                                # videoclip_reward_tensor.print_data_proto("videoclip_reward")
+                                # videophy_reward_tensor.print_data_proto("videophy_reward")
+                                                          
                                 # new_batch = gen_batch_output.union(reward_tensor)
                                 new_batch = gen_batch_output.union(aes_reward_tensor)
                                 new_batch.union(raft_reward_tensor)
                                 new_batch.union(videoclip_reward_tensor)
                                 new_batch.union(videophy_reward_tensor)
                                 
-                                del gen_batch_output
+                                # 权重设置
+                                aes_weight = 100
+                                raft_weight = 10
+                                videoclip_weight = 1
+                                videophy_weight = 100                                
+                                aes_reward_score = new_batch.batch["aes_rewards"]         # 权重 100
+                                raft_reward_score = new_batch.batch["raft_rewards"]       # 权重 10
+                                videoclip_reward_score = new_batch.batch["videoclip_rewards"]   # 权重 1
+                                videophy_reward_score = new_batch.batch["videophy_rewards"]     # 权重 100    
                                 
+                                # 加权求和并归一化
+                                avg_rewards = (
+                                    aes_reward_score * aes_weight +
+                                    raft_reward_score * raft_weight +
+                                    videoclip_reward_score * videoclip_weight +
+                                    videophy_reward_score * videophy_weight
+                                ) / 4  # shape: [B]
+
+                                from tensordict import TensorDict
+                                # 构建新的 batch 和 DataProto
+                                avg_reward_batch = TensorDict(
+                                    {
+                                        "rewards": avg_rewards,
+                                    },
+                                    batch_size=avg_rewards.shape[0]
+                                )
+                                reward_non_tensor_batch = aes_reward_tensor.non_tensor_batch
+                                avg_reward_tensor = DataProto(batch=avg_reward_batch, non_tensor_batch=reward_non_tensor_batch)
+                                                                                   
+                                new_batch.union(avg_reward_tensor)
+                                
+                                del gen_batch_output
+                
+                                # 打印测评分数
                                 new_batch.print_data_proto("new_batch after reward computation")
 
                     # === Updating ===

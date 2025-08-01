@@ -476,8 +476,8 @@ class AestheticRewardModelWorker(RewardModelWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        self.clip_model_path = "/nvfile-heatstorage/liangyzh/code/arena_models/ViT-L-14.pt"
-        self.aes_model_path = "/nvfile-heatstorage/liangyzh/code/arena_models/sa_0_4_vit_l_14_linear.pth"
+        self.clip_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/ViT-L-14.pt"
+        self.aes_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/sa_0_4_vit_l_14_linear.pth"
         import_external_libs(self.config.model.get("external_lib", None))
         
         self._build_model(config=self.config) 
@@ -570,7 +570,7 @@ class RAFTRewardModelWorker(RewardModelWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, stride: int = 1):
-        self.raft_model_path = "/nvfile-heatstorage/liangyzh/code/evalcrafter/EvalCrafter/checkpoints/RAFT/models/raft-things.pth"
+        self.raft_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/RAFT/models/raft-things.pth"
         # self.raft_model = self._load_raft_model(self.raft_model_path)
         self.stride = stride
         self._build_model(config=self.config)
@@ -687,7 +687,7 @@ class VideoclipRewardModelWorker(RewardModelWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        self.videoclip_model_path = "/nvfile-heatstorage/liangyzh/code/arena_models/VideoCLIP-XL.bin"
+        self.videoclip_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/VideoCLIP-XL.bin"
         self.v_mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
         self.v_std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
         
@@ -798,7 +798,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, media_tokens = ["<image>", "<|video|>"]):
-        # self.checkpoint = "/nvfile-heatstorage/liangyzh/interns/zhangxin/videophy/arena-example/videocon_physics"
+        # self.checkpoint = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/videocon_physics"
         self.checkpoint = "/root/videocon_physics"
         self.max_length = 256
         self._build_model(config=self.config)
