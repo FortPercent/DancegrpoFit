@@ -35,6 +35,9 @@ from tqdm.auto import tqdm
 from diffusers.image_processor import VaeImageProcessor
 from tensordict import TensorDict
 import os
+from PIL import Image
+import numpy as np
+import cv2
 
 __all__ = ['DiffusionRollout']
 
@@ -155,6 +158,96 @@ class DiffusionRollout(BaseRollout):
                 
                 # 后处理
                 video_frames = (video_frames + 1.0) / 2.0
+                
+                def save_video_and_prompt(video_frames, rank, index):
+                    """
+                    保存视频文件和对应的prompt文本
+                    Args:
+                        video_frames: torch.Tensor, shape (C, T, H, W), 范围 [0, 1]
+                        caption: str, 对应的文本prompt
+                        rank: int, 当前进程的rank
+                        index: int, 当前batch的索引
+                        args: 配置参数
+                    """
+                    import time
+                    from datetime import datetime
+                    # 获取当前时间戳
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    
+                    # 确保video_frames是正确的格式 (C, T, H, W)
+                    if video_frames.dim() == 4:
+                        C, T, H, W = video_frames.shape
+                        
+                        # 转换为numpy格式 (T, H, W, C)
+                        video_np = video_frames.permute(1, 2, 3, 0).cpu().numpy()  # (T, H, W, C)
+                        video_np = (video_np * 255).astype(np.uint8)
+                        
+                        # 如果是单通道，扩展为3通道
+                        if C == 1:
+                            video_np = np.repeat(video_np, 3, axis=-1)
+                        
+                        # 1. 保存第一帧图像
+                        first_frame = video_np[0]  # (H, W, C)
+                        
+                        # 保存第一帧为PNG图像
+                        if C >= 3:
+                            first_frame_pil = Image.fromarray(first_frame)
+                        else:
+                            first_frame_pil = Image.fromarray(first_frame[:,:,0], mode='L')
+                        
+                        image_filename = f"wan_frame_rank{rank}_batch{index}_{batch_captions[0]}.png"
+                        image_path = os.path.join("/nvfile-heatstorage/tele_data_share/wyb/Dancegrpo/inference_demo/output", image_filename)
+                        
+                        try:
+                            # first_frame_pil.save(image_path)
+                            # print(f"First frame saved: {image_path}")
+                            print("skip image save")
+                        except Exception as e:
+                            print(f"Error saving first frame {image_path}: {e}")
+
+                        # 保存视频
+                        video_filename = f"wan_video_rank{rank}_batch{index}_{batch_captions[0]}.mp4"
+                        video_path = os.path.join("/nvfile-heatstorage/tele_data_share/wyb/Dancegrpo/inference_demo/output", video_filename)
+                        
+                        try:
+                            # 使用opencv保存视频
+                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                            # fps = args.video_fps if hasattr(args, 'video_fps') else 8  # 默认8fps
+                            fps = 5
+                            out = cv2.VideoWriter(video_path, fourcc, fps, (W, H))
+                            
+                            for t in range(T):
+                                frame = video_np[t]  # (H, W, C)
+                                # OpenCV使用BGR格式
+                                if C == 3:
+                                    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                                else:
+                                    frame_bgr = frame
+                                out.write(frame_bgr)
+                            
+                            out.release()
+                            print(f"Video saved: {video_path}")
+                            
+                        except Exception as e:
+                            print(f"Error saving vid/eo {video_path}: {e}")
+                            # 如果视频保存失败，至少保存第一帧作为图像
+                            first_frame = video_np[0]  # (H, W, C)
+                            if C == 3:
+                                first_frame_pil = Image.fromarray(first_frame)
+                            else:
+                                first_frame_pil = Image.fromarray(first_frame[:,:,0], mode='L')
+                            
+                            image_filename = f"wan_frame_rank{rank}_batch{index}_{timestamp}.png"
+                            image_path = os.path.join("./images", image_filename)
+                            first_frame_pil.save(image_path)
+                            # print(f"First frame saved as image: {image_path}")
+                    else:
+                        print(f"Unexpected video_frames shape: {video_frames.shape}")                
+                import torch.distributed as dist
+                # save_video_and_prompt(video_frames, dist.get_rank(), index)
+                # print(f"local rank: {dist.get_rank()}")
+                # print(f"batch_captions[{index}]: {batch_captions}")
+                
                 video_frames = torch.clamp(video_frames, 0, 1)
                 video_frames = video_frames.unsqueeze(0)
             all_video_frames.append(video_frames)

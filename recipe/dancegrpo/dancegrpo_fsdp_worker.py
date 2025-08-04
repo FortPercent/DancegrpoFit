@@ -199,6 +199,8 @@ class DiffusionActorRolloutRefWorker(ActorRolloutRefWorker):
     @WorkerProfiler.annotate(color="red")
     def generate_sequences(self, prompts: DataProto):
         prompts = prompts.to(get_device_id())
+        # prompts.print_data_proto("input data")
+        # exit()
         timing_generate = {}
         with self.rollout_sharding_manager:
             log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
@@ -799,7 +801,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, media_tokens = ["<image>", "<|video|>"]):
         # self.checkpoint = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/videocon_physics"
-        self.checkpoint = "/root/videocon_physics"
+        self.checkpoint = "/root/arena_models/videocon_physics"
         self.max_length = 256
         self._build_model(config=self.config)
         self.media_tokens = {k: -int(i + 1) for i, k in enumerate(media_tokens)}
@@ -1164,6 +1166,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
         
         all_rewards = torch.cat(all_rewards, dim=0)
         all_rewards = all_rewards.to(torch.device('cpu'))
+        self.videophy_model.to("cpu")
         batch = TensorDict(
             {
                 "videophy_rewards": all_rewards,

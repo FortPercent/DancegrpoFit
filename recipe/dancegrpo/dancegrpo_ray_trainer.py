@@ -196,20 +196,20 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                 videophy_reward_score = new_batch.batch["videophy_rewards"]     # 权重 100    
                                 
                                 # 加权求和并归一化
-                                avg_rewards = (
+                                avg_reward_score = (
                                     aes_reward_score * aes_weight +
                                     raft_reward_score * raft_weight +
                                     videoclip_reward_score * videoclip_weight +
                                     videophy_reward_score * videophy_weight
-                                ) / 4  # shape: [B]
+                                ) / 400  # shape: [B]
 
                                 from tensordict import TensorDict
                                 # 构建新的 batch 和 DataProto
                                 avg_reward_batch = TensorDict(
                                     {
-                                        "rewards": avg_rewards,
+                                        "rewards": avg_reward_score,
                                     },
-                                    batch_size=avg_rewards.shape[0]
+                                    batch_size=avg_reward_score.shape[0]
                                 )
                                 reward_non_tensor_batch = aes_reward_tensor.non_tensor_batch
                                 avg_reward_tensor = DataProto(batch=avg_reward_batch, non_tensor_batch=reward_non_tensor_batch)
