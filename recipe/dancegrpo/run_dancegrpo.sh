@@ -22,9 +22,9 @@ loss_agg_mode="token-mean"
 enable_filter_groups=True
 filter_groups_metric=acc
 max_num_gen_batches=10
-train_prompt_bsz=8
+train_prompt_bsz=4
 gen_prompt_bsz=$((train_prompt_bsz * 1))
-n_resp_per_prompt=8
+n_resp_per_prompt=4
 train_prompt_mini_bsz=1
 
 # Ray
@@ -37,7 +37,7 @@ MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-32B"}
 CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
 TRAIN_FILE=${TRAIN_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
 TEST_FILE=${TEST_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # Algorithm
 temperature=1.0
@@ -130,8 +130,8 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     trainer.logger=['tensorboard'] \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
-    trainer.n_gpus_per_node=8 \
-    trainer.total_training_steps=41 \
+    trainer.n_gpus_per_node=4 \
+    trainer.total_training_steps=42 \
     trainer.nnodes="${NNODES}" \
     trainer.val_before_train=True \
     trainer.test_freq=5 \

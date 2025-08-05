@@ -244,7 +244,7 @@ class DiffusionRollout(BaseRollout):
                     else:
                         print(f"Unexpected video_frames shape: {video_frames.shape}")                
                 import torch.distributed as dist
-                # save_video_and_prompt(video_frames, dist.get_rank(), index)
+                save_video_and_prompt(video_frames, dist.get_rank(), index)
                 # print(f"local rank: {dist.get_rank()}")
                 # print(f"batch_captions[{index}]: {batch_captions}")
                 
