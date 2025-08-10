@@ -15,6 +15,8 @@ import logging
 import os
 import warnings
 import re
+import time
+
 import numpy as np
 
 import torch
@@ -501,6 +503,7 @@ class AestheticRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        start_time = time.time()
         # 读取数据，但是不删除
         datas=data.pop(
             batch_keys=['video_frames'],
@@ -557,6 +560,10 @@ class AestheticRewardModelWorker(RewardModelWorker):
         self.clip_mode.to(torch.device('cpu'))
         self.aesthetic_model.to(torch.device('cpu'))
         non_tensor_batch = data.non_tensor_batch
+        
+        end_time = time.time()
+        print(f"aes compute time: {end_time - start_time}s")
+        
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)        
    
 import argparse
@@ -629,6 +636,7 @@ class RAFTRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        start_time = time.time()
         # 读取数据，但是不删除
         datas=data.pop(
             batch_keys=['video_frames'],
@@ -678,6 +686,10 @@ class RAFTRewardModelWorker(RewardModelWorker):
         )
         self.raft_model.to(torch.device('cpu'))
         non_tensor_batch = data.non_tensor_batch
+        
+        end_time = time.time()
+        print(f"raft compute time: {end_time - start_time}s")        
+        
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
 
 # VideoclipRewardModelWorker is a worker that computes video-clip scores for images. 
@@ -738,6 +750,7 @@ class VideoclipRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        start_time = time.time()
         # 读取数据，但是不删除
         datas=data.pop(
             batch_keys=['video_frames'],
@@ -786,6 +799,10 @@ class VideoclipRewardModelWorker(RewardModelWorker):
         )
         self.videoclip_model.to(torch.device('cpu'))
         non_tensor_batch = data.non_tensor_batch
+       
+        end_time = time.time()
+        print(f"videoclip compute time: {end_time - start_time}s") 
+                
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
 
 # Videophy CAPTION
@@ -1089,27 +1106,56 @@ class VideophyRewardModelWorker(RewardModelWorker):
             assert len(entail_scores) == 1
         return entail_scores[0].item()
   
+    # def resize_video_frames(self, video_tensor, target_size=(224, 224)):
+    #     """
+    #     video_tensor: torch.Tensor, shape [B, C, T, H, W]
+    #     return: torch.Tensor, shape [B, C, T, 224, 224]
+    #     """
+    #     B, C, T, H, W = video_tensor.shape
+    #     # 把时间帧展平成 batch 维度
+    #     video_tensor = video_tensor.permute(0, 2, 1, 3, 4)  # [B, T, C, H, W]
+    #     video_tensor = video_tensor.reshape(B * T, C, H, W)  # [B*T, C, H, W]
+        
+    #     # 进行 resize
+    #     resized = F.interpolate(video_tensor, size=target_size, mode='bilinear', align_corners=False)  # [B*T, C, 224, 224]
+        
+    #     # reshape 回视频形式
+    #     resized = resized.reshape(B, T, C, *target_size)  # [B, T, C, 224, 224]
+    #     resized = resized.permute(0, 2, 1, 3, 4)  # [B, C, T, 224, 224]
+    #     return resized
     def resize_video_frames(self, video_tensor, target_size=(224, 224)):
         """
         video_tensor: torch.Tensor, shape [B, C, T, H, W]
         return: torch.Tensor, shape [B, C, T, 224, 224]
         """
         B, C, T, H, W = video_tensor.shape
+        target_H, target_W = target_size
         # 把时间帧展平成 batch 维度
         video_tensor = video_tensor.permute(0, 2, 1, 3, 4)  # [B, T, C, H, W]
         video_tensor = video_tensor.reshape(B * T, C, H, W)  # [B*T, C, H, W]
         
-        # 进行 resize
-        resized = F.interpolate(video_tensor, size=target_size, mode='bilinear', align_corners=False)  # [B*T, C, 224, 224]
-        
-        # reshape 回视频形式
-        resized = resized.reshape(B, T, C, *target_size)  # [B, T, C, 224, 224]
-        resized = resized.permute(0, 2, 1, 3, 4)  # [B, C, T, 224, 224]
-        return resized
+        # -------------------- Step 1: Resize (保持比例，最短边对齐) --------------------
+        # 计算缩放因子（保持原始比例）
+        scale = max(target_H / H, target_W / W)
+        new_H = int(round(H * scale))
+        new_W = int(round(W * scale))
+
+        resized = F.interpolate(video_tensor, size=(new_H, new_W), mode='bilinear', align_corners=False)
+
+        # -------------------- Step 2: Center Crop --------------------
+        top = (new_H - target_H) // 2
+        left = (new_W - target_W) // 2
+        cropped = resized[:, :, top:top+target_H, left:left+target_W]  # [B*T, C, target_H, target_W]
+
+        # -------------------- Step 3: 还原回视频格式 --------------------
+        cropped = cropped.view(B, T, C, target_H, target_W).permute(0, 2, 1, 3, 4)  # [B, C, T, H, W]
+
+        return cropped    
   
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        start_time = time.time()
         # 读取数据，但是不删除
         datas=data.pop(
             batch_keys=['video_frames'],
@@ -1135,8 +1181,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
         print("str(x.squeeze(0) done")
         batch_indices = torch.chunk(torch.arange(len(batch_caption)), len(batch_caption))
         print("torch.chunk(torch.arange(len(batch_caption)) done")
-        
-        import time
+
         start_time = time.time()
         self.videophy_model.to(get_device_id())
         load_time = time.time() - start_time
@@ -1175,6 +1220,10 @@ class VideophyRewardModelWorker(RewardModelWorker):
         )
         
         non_tensor_batch = data.non_tensor_batch
+        
+        end_time = time.time()
+        print(f"videophy compute time: {end_time - start_time}s")         
+        
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
                 
         
