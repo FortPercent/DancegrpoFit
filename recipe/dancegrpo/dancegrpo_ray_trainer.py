@@ -23,6 +23,9 @@ from pprint import pprint
 
 import numpy as np
 import torch
+import os
+import ray
+
 from tqdm import tqdm
 
 from verl import DataProto
@@ -102,6 +105,10 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
         batch = None
         num_prompt_in_batch = 0
         num_gen_batches = 0
+        
+        import torch.distributed as dist
+        streams = None
+        
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 metrics = {}
@@ -164,44 +171,35 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                         if self.use_rm:
                             # Calculate the HPS
                             with torch.amp.autocast('cuda'):
-
                                 # pop操作在RewardModelWorker内部进行，不会对datas产生影响
                                 # reward_tensor = self.rm_wg.compute_rm_score(gen_batch_output)
-                        
-                                aes_reward_tensor = self.aes_rm_wg.compute_rm_score(gen_batch_output)
-                                raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
-                                videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
-                                videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)
-                                
+                                # print(f"The process aes_rm_wg is {self.aes_rm_wg.workers}")
+                                # print(f"The process raft_rm_wg is {self.raft_rm_wg.workers}")
+                                # print(f"The process videoclip_rm_wg is {self.videoclip_rm_wg.workers}")
+                                # print(f"The process videophy_rm_wg is {self.videophy_rm_wg.workers}")
+                                # exit()
+                                                         
+                                # 依次调用
+                                # aes_reward_tensor = self.aes_rm_wg.compute_rm_score(gen_batch_output)
+                                # raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
+                                # videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
+                                # videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
                                 # # 打印测评分数
-                                # aes_reward_tensor.print_data_proto("aes_reward")
-                                # raft_reward_tensor.print_data_proto("raft_reward")
-                                # videoclip_reward_tensor.print_data_proto("videoclip_reward")
-                                # videophy_reward_tensor.print_data_proto("videophy_reward")
-                                                          
+                                # aes_reward_tensor.print_data_proto("aes_reward")             
                                 # new_batch = gen_batch_output.union(reward_tensor)
-                                new_batch = gen_batch_output.union(aes_reward_tensor)
-                                new_batch.union(raft_reward_tensor)
-                                new_batch.union(videoclip_reward_tensor)
-                                new_batch.union(videophy_reward_tensor)
+                                # new_batch = gen_batch_output.union(aes_reward_tensor)
+                                # new_batch.union(raft_reward_tensor)
+                                # new_batch.union(videoclip_reward_tensor)
+                                # new_batch.union(videophy_reward_tensor)
+
+                                multi_rewrd_tensor = self.multi_rm_wg.compute_rm_score(gen_batch_output)
+                                new_batch = gen_batch_output.union(multi_rewrd_tensor)
                                 
-                                # 权重设置
-                                aes_weight = 100
-                                raft_weight = 10
-                                videoclip_weight = 1
-                                videophy_weight = 100                                
-                                aes_reward_score = new_batch.batch["aes_rewards"]         # 权重 100
-                                raft_reward_score = new_batch.batch["raft_rewards"]       # 权重 10
-                                videoclip_reward_score = new_batch.batch["videoclip_rewards"]   # 权重 1
-                                videophy_reward_score = new_batch.batch["videophy_rewards"]     # 权重 100    
-                                
-                                # 加权求和并归一化
-                                avg_reward_score = (
-                                    aes_reward_score * aes_weight +
-                                    raft_reward_score * raft_weight +
-                                    videoclip_reward_score * videoclip_weight +
-                                    videophy_reward_score * videophy_weight
-                                ) / 400  # shape: [B]
+                                aes_reward_score = new_batch.batch["aes_rewards"]         
+                                raft_reward_score = new_batch.batch["raft_rewards"]       
+                                videoclip_reward_score = new_batch.batch["videoclip_rewards"]   
+                                videophy_reward_score = new_batch.batch["videophy_rewards"]   
+                                avg_reward_score = (aes_reward_score + raft_reward_score + videoclip_reward_score + videophy_reward_score) 
 
                                 from tensordict import TensorDict
                                 # 构建新的 batch 和 DataProto
@@ -211,7 +209,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                     },
                                     batch_size=avg_reward_score.shape[0]
                                 )
-                                reward_non_tensor_batch = aes_reward_tensor.non_tensor_batch
+                                reward_non_tensor_batch = multi_rewrd_tensor.non_tensor_batch
                                 avg_reward_tensor = DataProto(batch=avg_reward_batch, non_tensor_batch=reward_non_tensor_batch)
                                                                                    
                                 new_batch.union(avg_reward_tensor)

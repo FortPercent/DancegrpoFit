@@ -244,5 +244,5 @@ class WorkerGroup:
                     method_names.append(method_name)
                 except Exception as e:
                     raise ValueError(f"Fail to set method_name {method_name}") from e
-
+        print("_bind_worker_method done")
         return method_names
