@@ -16,6 +16,7 @@ import os
 import warnings
 import re
 import time
+import threading
 
 import numpy as np
 
@@ -34,7 +35,7 @@ from verl import DataProto
 from verl.models.transformers.monkey_patch import apply_monkey_patch
 from verl.single_controller.base import Worker
 from verl.single_controller.base.decorator import Dispatch, register
-from verl.utils import hf_tokenizer
+from verl.utils import hf_tokenizer,hf_processer
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.utils.debug import log_gpu_memory_usage
 from verl.utils.device import get_device_id, get_device_name, get_nccl_backend
@@ -1266,24 +1267,137 @@ class VideophyRewardModelWorker():
         
         # return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
         return DataProto(batch=batch)
+
+class QwenRewardModelWorker(RewardModelWorker):
+    def __init__(self, role: str): 
+        if not torch.distributed.is_initialized():
+            rank = int(os.environ.get("RANK", 0))
+            world_size = int(os.environ.get("WORLD_SIZE", 1))
+            torch.distributed.init_process_group(backend=f"cpu:gloo,{get_device_name()}:{get_nccl_backend()}", rank=rank, world_size=world_size)
+
+        # build device mesh for FSDP
+        world_size = torch.distributed.get_world_size()
+        # TODO(sgm): support FSDP hybrid shard for larger model
+        self.device_mesh = create_device_mesh(world_size=world_size, fsdp_size=self.config.actor.fsdp_config.fsdp_size)
+
+        # build device mesh for Ulysses Sequence Parallel
+        # self.ulysses_device_mesh = None
+        # self.ulysses_sequence_parallel_size = self.config.actor.get("ulysses_sequence_parallel_size", 1)
+        # dp = world_size // self.ulysses_sequence_parallel_size
+        # if self.ulysses_sequence_parallel_size > 1:
+        #     self.ulysses_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, self.ulysses_sequence_parallel_size), mesh_dim_names=["dp", "sp"])
+
+        # self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
+        self._lora_rank = self.config.model.get("lora_rank", 0)
+        self._is_lora = self._lora_rank > 0
+
+        from omegaconf import DictConfig, OmegaConf
+        
+        profiler_config = ProfilerConfig()
+        
+        profiler_config = profiler_config.union(ProfilerConfig(**OmegaConf.to_object(config.rollout.get("profiler", DictConfig({})))))
+        WorkerProfilerExtension.__init__(self, WorkerProfiler(rank=self.rank, config=profiler_config))
+
+        self._is_offload_param = True
+        # self._is_offload_optimizer = False
+
+        if self.config.rollout.log_prob_micro_batch_size is not None:
+            self.config.rollout.log_prob_micro_batch_size //= self.device_mesh.size() // self.ulysses_sequence_parallel_size
+            self.config.rollout.log_prob_micro_batch_size_per_gpu = self.config.rollout.log_prob_micro_batch_size
+
+    
+    def _build_rollout(self,trust_remote_code=False):
+        from transformers import GPT2Config
+        print("begin to build_wen_reward_model")
+        local_path="/nvfile-heatstorage/chatrl/public/models/Qwen2-VL-72B-Instruct"
+        
+        tokenizer_path = os.path.join(local_path, "google/umt5-xxl")
+        self.tokenizer = hf_tokenizer(tokenizer_path, trust_remote_code=trust_remote_code)
+        
+        self.actor_model_config=GPT2Config.from_pretrained(local_path, 
+                                                    trust_remote_code=trust_remote_code, 
+                                                    attn_implementation="flash_attention_2")
+        
+        from torch.distributed.device_mesh import init_device_mesh
+        
+        infer_tp = self.config.rollout.tensor_model_parallel_size
+        dp = self.world_size // infer_tp
+        assert self.world_size % infer_tp == 0, f"rollout world_size: {self.world_size} is not divisible by infer_tp: {infer_tp}"
+        rollout_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, infer_tp), mesh_dim_names=["dp", "infer_tp"])
+        
+        from verl.workers.rollout.vllm_rollout import vllm_mode, vLLMRollout
+        from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
+        log_gpu_memory_usage(f"Before building vllm rollout", logger=logger)
+        local_path = copy_to_local(self.config.model.path, use_shm=self.config.model.get("use_shm", False))
+        lora_kwargs = {"lora_kwargs": {"enable_lora": True, "max_loras": 1, "max_lora_rank": self._lora_rank}} if self._is_lora else {}
+        # lora_kwargs = {}
+        if vllm_mode == "customized":
+            rollout = vLLMRollout(actor_module=self.actor_module_fsdp, 
+                                  config=self.config.rollout, 
+                                  tokenizer=self.tokenizer, 
+                                  model_hf_config=self.actor_model_config, trust_remote_code=trust_remote_code, **lora_kwargs)
+        elif vllm_mode == "spmd":
+            from verl.workers.rollout.vllm_rollout import vLLMAsyncRollout
+            vllm_rollout_cls = vLLMRollout if self.config.rollout.mode == "sync" else vLLMAsyncRollout
+            rollout = vllm_rollout_cls(model_path=local_path, config=self.config.rollout, tokenizer=self.tokenizer, model_hf_config=self.actor_model_config, device_mesh=rollout_device_mesh, trust_remote_code=trust_remote_code, **lora_kwargs)
+        else:
+            raise NotImplementedError("vllm_mode must be 'customized' or 'spmd'")
+        
+        log_gpu_memory_usage(f"After building vllm rollout", logger=logger)
+        full_params = torch.distributed.get_world_size() == 1
+        rollout_sharding_manager = FSDPVLLMShardingManager(
+            module=self.actor_module_fsdp,
+            inference_engine=rollout.inference_engine,
+            model_config=self.actor_model_config,
+            full_params=full_params,
+            device_mesh=rollout_device_mesh,
+            offload_param=self._is_offload_param,
+            load_format=self.config.rollout.load_format,
+            layered_summon=self.config.rollout.get("layered_summon", False),
+        )
+        log_gpu_memory_usage("After building sharding manager", logger=logger)
+        
+        return rollout, rollout_sharding_manager
+    
+    def init_model(self):
+        # from verl.workers.actor import DataParallelPPOActor
+
+        # This is used to import external_lib into the huggingface systems
+        import_external_libs(self.config.model.get("external_lib", None))
+
+        # from omegaconf import OmegaConf
+
+        # override_model_config = OmegaConf.to_container(self.config.model.get("override_config", OmegaConf.create()))
+
+        # use_remove_padding = self.config.model.get("use_remove_padding", False)
+        # use_shm = self.config.model.get("use_shm", False)
+        # use_fused_kernels = self.config.model.get("use_fused_kernels", False)
+        # get the original unwrapped module
+        self.rollout, self.rollout_sharding_manager = self._build_rollout(trust_remote_code=self.config.model.get("trust_remote_code", False))
+    
+    # (TO DO) complete here!
+    def compute_rm_score(self,data:DataProto):
+        return DataProto()
+
    
 class MultiRewardModelWorker(RewardModelWorker):
     """
     聚合 Aesthetic, RAFT, Videoclip, Videophy 四种 RewardModelWorker
     """
-
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def init_model(self):
+    def init_model(self, config:DictConfig):
         # 初始化各个 reward worker
         self.aesthetic_worker = AestheticRewardModelWorker()
         self.raft_worker = RAFTRewardModelWorker()
         self.videoclip_worker = VideoclipRewardModelWorker()
         self.videophy_worker = VideophyRewardModelWorker()
+        self.qwen_worker = QwenRewardModelWorker(role="rollout")
 
         self.aesthetic_worker.init_model()
         self.raft_worker.init_model()
         self.videoclip_worker.init_model()
         self.videophy_worker.init_model()
+        self.qwen_worker.init_model()
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="purple")
@@ -1292,22 +1406,62 @@ class MultiRewardModelWorker(RewardModelWorker):
             batch_keys=['video_frames'],
             non_tensor_batch_keys=["caption"],
         )        
-        # 分别调用各个 reward worker 的 compute_rm_score
-        aes_result = self.aesthetic_worker.compute_rm_score(datas)
-        raft_result = self.raft_worker.compute_rm_score(datas)
-        videoclip_result = self.videoclip_worker.compute_rm_score(datas)
-        videophy_result = self.videophy_worker.compute_rm_score(datas)
+        # rank = torch.distributed.get_rank()
+        streams = [torch.cuda.Stream() for _ in range(5)]
+        outputs = [None] * 5
+        def run_in_stream(idx, model, input_tensor):
+            with torch.cuda.stream(streams[idx]):
+                outputs[idx] = model.compute_rm_score(input_tensor.to("cuda"))           
+        threads = [
+            threading.Thread(target=run_in_stream, args=(0, self.aesthetic_worker, datas)),
+            threading.Thread(target=run_in_stream, args=(1, self.raft_worker, datas)),
+            threading.Thread(target=run_in_stream, args=(2, self.videoclip_worker, datas)),
+            threading.Thread(target=run_in_stream, args=(3, self.videophy_worker, datas)),
+            threading.Thread(target=run_in_stream, args=(4,self.qwen_worker, datas)),
+        ]
+    
+                                 
+        start_time = time.time()
+        for t in threads: t.start()
+        for t in threads: t.join()                
+        # # 分别调用各个 reward worker 的 compute_rm_score
+        # with torch.cuda.stream(streams[0]):
+        #     aes_result = self.aesthetic_worker.compute_rm_score(datas)
+        # with torch.cuda.stream(streams[1]):
+        #     raft_result = self.raft_worker.compute_rm_score(datas)
+        # with torch.cuda.stream(streams[2]):
+        #     videoclip_result = self.videoclip_worker.compute_rm_score(datas)
+        # with torch.cuda.stream(streams[3]):
+        #     videophy_result = self.videophy_worker.compute_rm_score(datas)
+        # torch.cuda.synchronize()
 
+        # aes_result = self.aesthetic_worker.compute_rm_score(datas)
+        # raft_result = self.raft_worker.compute_rm_score(datas)
+        # videoclip_result = self.videoclip_worker.compute_rm_score(datas)
+        # videophy_result = self.videophy_worker.compute_rm_score(datas)
+        
+        end_time = time.time()
+        print(f"total reward time: {end_time - start_time}")
         # 合并结果
+        # batch = TensorDict(
+        #     {
+        #         "aes_rewards": aes_result.batch["aes_rewards"],
+        #         "raft_rewards": raft_result.batch["raft_rewards"],
+        #         "videoclip_rewards": videoclip_result.batch["videoclip_rewards"],
+        #         "videophy_rewards": videophy_result.batch["videophy_rewards"],
+        #     },
+        #     batch_size=aes_result.batch.batch_size
+        # )
         batch = TensorDict(
             {
-                "aes_rewards": aes_result.batch["aes_rewards"],
-                "raft_rewards": raft_result.batch["raft_rewards"],
-                "videoclip_rewards": videoclip_result.batch["videoclip_rewards"],
-                "videophy_rewards": videophy_result.batch["videophy_rewards"],
+                "aes_rewards": outputs[0].batch["aes_rewards"],
+                "raft_rewards": outputs[1].batch["raft_rewards"],
+                "videoclip_rewards": outputs[2].batch["videoclip_rewards"],
+                "videophy_rewards": outputs[3].batch["videophy_rewards"],
+                "qwen_rewards": outputs[4].batch["qwen_rewards"],
             },
-            batch_size=aes_result.batch.batch_size
-        )
+            batch_size=outputs[0].batch.batch_size
+        )        
         non_tensor_batch = data.non_tensor_batch
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
              
