@@ -35,8 +35,10 @@ NNODES=${NNODES:-1}
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
 MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-32B"}
 CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
-TRAIN_FILE=${TRAIN_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
-TEST_FILE=${TEST_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
+# TRAIN_FILE=${TRAIN_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
+# TEST_FILE=${TEST_FILE:-"/nvfile-heatstorage/teleai-infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
+TRAIN_FILE=${TRAIN_FILE:-"/gemini/space/wuxauner/Dancegrpo/data/1__3B/rl_embeddings/processed_wan_prompt.json"}
+TEST_FILE=${TEST_FILE:-"/gemini/space/wuxauner/Dancegrpo/data/1__3B/rl_embeddings/processed_wan_prompt.json"}
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # Algorithm
@@ -68,8 +70,8 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     algorithm.adv_estimator=${adv_estimator} \
     algorithm.use_kl_in_reward=${use_kl_in_reward} \
     algorithm.kl_ctrl.kl_coef=${kl_coef} \
-    actor_rollout_ref.model.path='/root/Wan2.1-T2V-1.3B' \
-    actor_rollout_ref.model.vae_model_path='/root/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth' \
+    actor_rollout_ref.model.path='/gemini/space/wyb/model/Wan2___1-T2V-1___3B' \
+    actor_rollout_ref.model.vae_model_path='/gemini/space/wyb/model/Wan2___1-T2V-1___3B/Wan2.1_VAE.pth' \
     actor_rollout_ref.cfg=0.0 \
     actor_rollout_ref.h=480 \
     actor_rollout_ref.w=832 \

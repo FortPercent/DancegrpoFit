@@ -758,16 +758,16 @@ class RayPPOTrainer:
         # create a reward model if reward_fn is None
         if self.use_rm:
             # we create a RM here
-            resource_pool = self.resource_pool_manager.get_resource_pool(Role.RewardModel)
+            resource_pool = self.resource_pool_manager.get_resource_pool(Role.MultiRewardModel)
             
-            rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
+            # rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
             # aes_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.AestheticRewardModel], config=self.config.reward_model)
             # raft_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RAFTRewardModel], config=self.config.reward_model)
             # videoclip_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.VideoclipRewardModel], config=self.config.reward_model)
             # videophy_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.VideophyRewardModel], config=self.config.reward_model)
             multi_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.MultiRewardModel], config=self.config.reward_model)
             
-            self.resource_pool_to_cls[resource_pool]["rm"] = rm_cls
+            # self.resource_pool_to_cls[resource_pool]["rm"] = rm_cls
             # self.resource_pool_to_cls[resource_pool]["aes_rm"] = aes_rm_cls
             # self.resource_pool_to_cls[resource_pool]["raft_rm"] = raft_rm_cls
             # self.resource_pool_to_cls[resource_pool]["videoclip_rm"] = videoclip_rm_cls
@@ -803,8 +803,8 @@ class RayPPOTrainer:
             self.ref_policy_wg.init_model()
 
         if self.use_rm:
-            self.rm_wg = all_wg["rm"]
-            self.rm_wg.init_model()
+            # self.rm_wg = all_wg["rm"]
+            # self.rm_wg.init_model()
             
             # self.aes_rm_wg = all_wg.get("aes_rm")
             # self.raft_rm_wg = all_wg.get("raft_rm")
