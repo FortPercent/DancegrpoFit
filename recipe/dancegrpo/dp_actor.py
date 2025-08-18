@@ -47,21 +47,23 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def update_policy(self, data: DataProto):
         #这里显存就开始增加了
-        free, total = torch.cuda.mem_get_info()
-        print("begin forward")
-        print(f"剩余显存: {free / (1024 ** 3):.2f} GB")
-        print(f"总显存:   {total / (1024 ** 3):.2f} GB")
-        print(f"已用显存: {(total - free) / (1024 ** 3):.2f} GB")
-        data = data.to(get_device_id())
+        # free, total = torch.cuda.mem_get_info()
+        # print("begin forward")
+        # print(f"剩余显存: {free / (1024 ** 3):.2f} GB")
+        # print(f"总显存:   {total / (1024 ** 3):.2f} GB")
+        # print(f"已用显存: {(total - free) / (1024 ** 3):.2f} GB")
+        # data = data.to(get_device_id())
         # make sure we are in training mode
+        # print(data.batch['timesteps'].device)
+
         self.actor_module.train()
  
-        device = torch.device(f"cuda:{get_device_id()}")
+        # torch.cuda.memory._record_memory_history(max_entries=100000)
         
         perms = torch.stack([
             torch.randperm(len(data.batch["timesteps"][0])) 
             for _ in range(data.batch.batch_size[0])
-        ]).to(device)
+        ])
 
         from verl.utils.ulysses import get_ulysses_sequence_parallel_group, get_ulysses_sequence_parallel_world_size
         if get_ulysses_sequence_parallel_world_size() > 1:
@@ -72,7 +74,7 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
         # exit(0)
         for key in ["timesteps", "latents", "next_latents", "log_probs"]:
             data.batch[key] = data.batch[key][
-                torch.arange(data.batch.batch_size[0]).to(device)[:, None],
+                torch.arange(data.batch.batch_size[0])[:, None],
                 perms,
             ]
 
@@ -102,9 +104,13 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
         self.gradient_accumulation = (
                 self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
             )
+        # data=data.to("cpu")
         dataloader = data.select(select_keys, non_tensor_select_keys).chunk(data.batch.batch_size[0])
-        torch.cuda.memory._record_memory_history(max_entries=100000)
+        
+        device = torch.device(f"cuda:{get_device_id()}")
+        print(self.gradient_accumulation)
         for batch_idx, data in enumerate(dataloader):
+            data.to(device)
             print("batch_idx",batch_idx)
             print("+"*100)
             # mini_batch = data
@@ -165,23 +171,24 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                 loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss)) / (self.gradient_accumulation * train_timesteps)
 
                 loss.backward()
-                from datetime import datetime
-
-                timestamp = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
-                file_name = f"{torch.distributed.get_rank()}_visual_mem_{timestamp}.pickle"
-                print("========================================================")
-                print(f"save snapshot: {file_name}")
-                print("========================================================")
-                # save record:
-                torch.cuda.memory._dump_snapshot(file_name)
-                torch.cuda.memory._record_memory_history(enabled=None)
-                torch.cuda.synchronize()
-                exit(0)
   
                 avg_loss = loss.detach().clone()
  
                 torch.distributed.all_reduce(avg_loss, op=torch.distributed.ReduceOp.AVG)
                 # total_loss += avg_loss.item()
+                # if batch_idx==3:
+                #     from datetime import datetime
+
+                #     timestamp = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
+                #     file_name = f"{torch.distributed.get_rank()}_visual_mem_{timestamp}.pickle"
+                #     print("========================================================")
+                #     print(f"save snapshot: {file_name}")
+                #     print("========================================================")
+                #     # save record:
+                #     torch.cuda.memory._dump_snapshot(file_name)
+                #     torch.cuda.memory._record_memory_history(enabled=None)
+                #     torch.cuda.synchronize()
+                #     exit(0)
                 
             if (batch_idx + 1) % self.gradient_accumulation == 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_module.parameters(), self.config.max_grad_norm)
@@ -219,31 +226,8 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
 
         autocast_dtype = torch.bfloat16
         with torch.autocast("cuda", dtype=autocast_dtype):
-            # 加载保存的 tensor 和数据
-            # file_name = f"/nvfile-heatstorage/teleai-infra/wxe/dancegrpo_aigc/0_latent_timestep_data.pt"
-            # print(file_name)
-            # data = torch.load(file_name)
 
-            # latents = data["latents"]      # torch.Tensor
-            # timesteps = data["timestep"]     # torch.Tensor
-            # seq_len = data["seq_len"]          # int
-            # context = data["context"]       # list of tensor 或 tensor
-            # pre_latents = data["pre_latents"]
-            # context_null = data["context_null"]
-            # sigma_schedule = data["sigma_schedule"]
-
-            # print("latents:", latents.shape)
-            # print("timestep:", timesteps)
-            # print("seq_len:", seq_len)
-            # print(len(context))
-            latents.to(pre_latents.device)
-
-            # torch.manual_seed(42)
-
-            # watch_module_forward_backward(transformer, use_megatron=False, use_deepspeed=False,use_fsdp=True)
-
-            # print("come here!!!!")
-            # register_all_hooks(transformer)
+            # latents.to(pre_latents.device)
             
             pred_cond = transformer(
                 x=[latents],
@@ -251,11 +235,6 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                 context=context,
                 seq_len=seq_len
             )
-            # TensorWatch.step()
-            # file_name = f"{torch.distributed.get_rank()}_pred_cond_debug_tensors.pt"
-            # print(file_name)
-            # torch.save(pred, file_name)
-            # exit(0)
             
             # 处理条件预测输出
             if isinstance(pred_cond, dict) and 'rgb' in pred_cond:
@@ -269,25 +248,26 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
             del pred_cond
             torch.cuda.empty_cache()
                 
-            # 再计算无条件预测
-            pred_uncond = transformer(
-                x=[latents],  # 保持List[Tensor]格式
-                t=timesteps,
-                context=context_null,  # List[Tensor]
-                seq_len=seq_len
-            )
+            #再计算无条件预测
+            with torch.no_grad(): 
+                pred_uncond = transformer(
+                    x=[latents],  # 保持List[Tensor]格式
+                    t=timesteps,
+                    context=context_null,  # List[Tensor]
+                    seq_len=seq_len
+                )
 
                 
-            # 处理无条件预测输出
-            if isinstance(pred_uncond, dict) and 'rgb' in pred_uncond:
-                model_output_uncond = pred_uncond['rgb'][0]
-            elif isinstance(pred_uncond, list):
-                model_output_uncond = pred_uncond[0]
-            else:
-                model_output_uncond = pred_uncond
-                
-            del pred_uncond
-            torch.cuda.empty_cache()
+                #处理无条件预测输出
+                if isinstance(pred_uncond, dict) and 'rgb' in pred_uncond:
+                    model_output_uncond = pred_uncond['rgb'][0]
+                elif isinstance(pred_uncond, list):
+                    model_output_uncond = pred_uncond[0]
+                else:
+                    model_output_uncond = pred_uncond
+                    
+                del pred_uncond
+                torch.cuda.empty_cache()
             
             # CFG组合
             model_output = model_output_uncond + guide_scale * (model_output_cond - model_output_uncond)

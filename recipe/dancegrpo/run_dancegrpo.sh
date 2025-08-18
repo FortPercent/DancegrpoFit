@@ -24,7 +24,7 @@ filter_groups_metric=acc
 max_num_gen_batches=10
 train_prompt_bsz=4 # same with dp
 gen_prompt_bsz=$((train_prompt_bsz * 3))
-n_resp_per_prompt=4
+n_resp_per_prompt=12
 train_prompt_mini_bsz=1
 
 # Ray
@@ -35,8 +35,8 @@ NNODES=${NNODES:-1}
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
 # MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-32B"}
 CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
-TRAIN_FILE=${TRAIN_FILE:-"/nvfile-heatstorage/ai_infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
-TEST_FILE=${TEST_FILE:-"/nvfile-heatstorage/ai_infra/wxe/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
+TRAIN_FILE=${TRAIN_FILE:-"/nvfile-heatstorage/ai_infra/data/wuxn5/wuxuaner/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
+TEST_FILE=${TEST_FILE:-"/nvfile-heatstorage/ai_infra/data/wuxn5/wuxuaner/Dancegrpo_verl/data/rl_embeddings/processed_wan_prompt.json"}
 # export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # Algorithm
@@ -68,7 +68,7 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     actor_rollout_ref.cfg=5.0 \
     actor_rollout_ref.h=720 \
     actor_rollout_ref.w=1280 \
-    actor_rollout_ref.num_frames=81 \
+    actor_rollout_ref.num_frames=5 \
     actor_rollout_ref.sampling_steps=16 \
     actor_rollout_ref.actor.eta=0.25 \
     actor_rollout_ref.lr_warmup_steps=0 \
@@ -94,7 +94,7 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     actor_rollout_ref.actor.optim.lr=2e-6 \
     actor_rollout_ref.actor.optim.lr_warmup_steps=0 \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=1 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
     actor_rollout_ref.actor.fsdp_config.param_offload=${offload} \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=${offload} \
     actor_rollout_ref.actor.entropy_coeff=0 \

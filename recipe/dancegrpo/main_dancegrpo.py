@@ -14,7 +14,7 @@ def run_ppo(config) -> None:
     if not ray.is_initialized():
         # this is for local ray cluster
         ray.init(
-            runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}},
+            runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN", "PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}},
             num_cpus=config.ray_init.num_cpus,
         )
 
@@ -40,8 +40,10 @@ class TaskRunner:
         # instantiate tokenizer
         # TODO 是否需要tokenizer和preprocessor
         # 需要的
-        from verl.utils import hf_processor, hf_tokenizer
         import os
+
+        from verl.utils import hf_processor, hf_tokenizer
+
         # processor =None
         tokenizer_path = os.path.join(local_path, "google/umt5-xxl")
         tokenizer = hf_tokenizer(tokenizer_path)
@@ -50,6 +52,7 @@ class TaskRunner:
         if config.actor_rollout_ref.actor.strategy == "fsdp":
             assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
             from verl.single_controller.ray import RayWorkerGroup
+
             from .dancegrpo_fsdp_worker import DiffusionActorRolloutRefWorker
 
             ray_worker_group_cls = RayWorkerGroup
