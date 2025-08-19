@@ -93,6 +93,10 @@ class TaskRunner:
                 raise NotImplementedError
             # role_worker_mapping[Role.RewardModel] = ray.remote(DiffusionRewardModelWorker)
             # mapping[Role.RewardModel] = global_pool_id
+<<<<<<< HEAD
+=======
+            
+>>>>>>> 1a4d984bf79ff7bba4bbe7980cef0b223ffb145b
             # role_worker_mapping[Role.AestheticRewardModel] = ray.remote(AestheticRewardModelWorker)
             # mapping[Role.AestheticRewardModel] = global_pool_id
             # role_worker_mapping[Role.RAFTRewardModel] = ray.remote(RAFTRewardModelWorker)

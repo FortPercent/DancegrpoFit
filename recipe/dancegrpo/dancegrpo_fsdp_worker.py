@@ -1273,17 +1273,19 @@ class MultiRewardModelWorker(RewardModelWorker):
     聚合 Aesthetic, RAFT, Videoclip, Videophy 四种 RewardModelWorker
     """
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def init_model(self):
+    def init_model(self, config:DictConfig):
         # 初始化各个 reward worker
         self.aesthetic_worker = AestheticRewardModelWorker()
         self.raft_worker = RAFTRewardModelWorker()
         self.videoclip_worker = VideoclipRewardModelWorker()
         self.videophy_worker = VideophyRewardModelWorker()
+        self.qwen_worker = QwenRewardModelWorker(role="rollout")
 
         self.aesthetic_worker.init_model()
         self.raft_worker.init_model()
         self.videoclip_worker.init_model()
         self.videophy_worker.init_model()
+        self.qwen_worker.init_model()
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="purple")
@@ -1312,16 +1314,33 @@ class MultiRewardModelWorker(RewardModelWorker):
         torch.cuda.synchronize()
         
 
+        # aes_result = self.aesthetic_worker.compute_rm_score(datas)
+        # raft_result = self.raft_worker.compute_rm_score(datas)
+        # videoclip_result = self.videoclip_worker.compute_rm_score(datas)
+        # videophy_result = self.videophy_worker.compute_rm_score(datas)
+        
+        end_time = time.time()
+        print(f"total reward time: {end_time - start_time}")
         # 合并结果
+        # batch = TensorDict(
+        #     {
+        #         "aes_rewards": aes_result.batch["aes_rewards"],
+        #         "raft_rewards": raft_result.batch["raft_rewards"],
+        #         "videoclip_rewards": videoclip_result.batch["videoclip_rewards"],
+        #         "videophy_rewards": videophy_result.batch["videophy_rewards"],
+        #     },
+        #     batch_size=aes_result.batch.batch_size
+        # )
         batch = TensorDict(
             {
-                "aes_rewards": aes_result.batch["aes_rewards"],
-                "raft_rewards": raft_result.batch["raft_rewards"],
-                "videoclip_rewards": videoclip_result.batch["videoclip_rewards"],
-                "videophy_rewards": videophy_result.batch["videophy_rewards"],
+                "aes_rewards": outputs[0].batch["aes_rewards"],
+                "raft_rewards": outputs[1].batch["raft_rewards"],
+                "videoclip_rewards": outputs[2].batch["videoclip_rewards"],
+                "videophy_rewards": outputs[3].batch["videophy_rewards"],
+                "qwen_rewards": outputs[4].batch["qwen_rewards"],
             },
-            batch_size=aes_result.batch.batch_size
-        )
+            batch_size=outputs[0].batch.batch_size
+        )        
         non_tensor_batch = data.non_tensor_batch
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
              
