@@ -97,7 +97,7 @@ class ResourcePoolManager:
             # For FSDP backend, we recommend using max_colocate_count=1 that merge all WorkerGroups into one.
             # For Megatron backend, we recommend using max_colocate_count>1
             # that can utilize different WorkerGroup for differnt models
-            resource_pool = RayResourcePool(process_on_nodes=process_on_nodes, use_gpu=True, max_colocate_count=1, name_prefix=resource_pool_name)
+            resource_pool = RayResourcePool(process_on_nodes=process_on_nodes, use_gpu=True, max_colocate_count=5, name_prefix=resource_pool_name)
             self.resource_pool_dict[resource_pool_name] = resource_pool
 
         self._check_resource_available()
@@ -334,7 +334,7 @@ class RayPPOTrainer:
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
         self.use_reference_policy = Role.RefPolicy in role_worker_mapping
-        self.use_rm = Role.RewardModel in role_worker_mapping
+        self.use_rm = Role.MultiRewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
         self.device_name = device_name
         self.validation_generations_logger = ValidationGenerationsLogger()
@@ -758,16 +758,16 @@ class RayPPOTrainer:
         # create a reward model if reward_fn is None
         if self.use_rm:
             # we create a RM here
-            resource_pool = self.resource_pool_manager.get_resource_pool(Role.RewardModel)
+            resource_pool = self.resource_pool_manager.get_resource_pool(Role.MultiRewardModel)
             
-            rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
+            # rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
             # aes_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.AestheticRewardModel], config=self.config.reward_model)
             # raft_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RAFTRewardModel], config=self.config.reward_model)
             # videoclip_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.VideoclipRewardModel], config=self.config.reward_model)
             # videophy_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.VideophyRewardModel], config=self.config.reward_model)
             multi_rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.MultiRewardModel], config=self.config.reward_model)
             
-            self.resource_pool_to_cls[resource_pool]["rm"] = rm_cls
+            # self.resource_pool_to_cls[resource_pool]["rm"] = rm_cls
             # self.resource_pool_to_cls[resource_pool]["aes_rm"] = aes_rm_cls
             # self.resource_pool_to_cls[resource_pool]["raft_rm"] = raft_rm_cls
             # self.resource_pool_to_cls[resource_pool]["videoclip_rm"] = videoclip_rm_cls
@@ -803,8 +803,8 @@ class RayPPOTrainer:
             self.ref_policy_wg.init_model()
 
         if self.use_rm:
-            self.rm_wg = all_wg["rm"]
-            self.rm_wg.init_model()
+            # self.rm_wg = all_wg["rm"]
+            # self.rm_wg.init_model()
             
             # self.aes_rm_wg = all_wg.get("aes_rm")
             # self.raft_rm_wg = all_wg.get("raft_rm")

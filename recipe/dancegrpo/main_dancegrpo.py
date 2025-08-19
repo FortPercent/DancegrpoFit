@@ -91,18 +91,14 @@ class TaskRunner:
                 from verl.workers.megatron_workers import RewardModelWorker
             else:
                 raise NotImplementedError
-            role_worker_mapping[Role.RewardModel] = ray.remote(DiffusionRewardModelWorker)
-            mapping[Role.RewardModel] = global_pool_id
-            
+            # role_worker_mapping[Role.RewardModel] = ray.remote(DiffusionRewardModelWorker)
+            # mapping[Role.RewardModel] = global_pool_id
             # role_worker_mapping[Role.AestheticRewardModel] = ray.remote(AestheticRewardModelWorker)
             # mapping[Role.AestheticRewardModel] = global_pool_id
-            
             # role_worker_mapping[Role.RAFTRewardModel] = ray.remote(RAFTRewardModelWorker)
             # mapping[Role.RAFTRewardModel] = global_pool_id
-            
             # role_worker_mapping[Role.VideoclipRewardModel] = ray.remote(VideoclipRewardModelWorker)
             # mapping[Role.VideoclipRewardModel] = global_pool_id
-            
             # role_worker_mapping[Role.VideophyRewardModel] = ray.remote(VideophyRewardModelWorker)
             # mapping[Role.VideophyRewardModel] = global_pool_id
             role_worker_mapping[Role.MultiRewardModel] = ray.remote(MultiRewardModelWorker)

@@ -16,6 +16,7 @@ import os
 import warnings
 import re
 import time
+import threading
 
 import numpy as np
 
@@ -34,7 +35,7 @@ from verl import DataProto
 from verl.models.transformers.monkey_patch import apply_monkey_patch
 from verl.single_controller.base import Worker
 from verl.single_controller.base.decorator import Dispatch, register
-from verl.utils import hf_tokenizer
+from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.utils.debug import log_gpu_memory_usage
 from verl.utils.device import get_device_id, get_device_name, get_nccl_backend
@@ -480,8 +481,8 @@ class AestheticRewardModelWorker():
 
     # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        self.clip_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/ViT-L-14.pt"
-        self.aes_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/sa_0_4_vit_l_14_linear.pth"
+        self.clip_model_path = "/gemini/space/wyb/model/arena_model/ViT-L-14.pt"
+        self.aes_model_path = "/gemini/space/wyb/model/arena_model/sa_0_4_vit_l_14_linear.pth"
         # import_external_libs(self.config.model.get("external_lib", None))
         self._build_model() 
         
@@ -590,7 +591,7 @@ class RAFTRewardModelWorker():
 
     # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, stride: int = 1):
-        self.raft_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/RAFT/models/raft-things.pth"
+        self.raft_model_path = "/gemini/space/wyb/model/arena_model/raft-things.pth"
         # self.raft_model = self._load_raft_model(self.raft_model_path)
         self.stride = stride
         self._build_model()
@@ -722,7 +723,7 @@ class VideoclipRewardModelWorker():
 
     # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        self.videoclip_model_path = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/VideoCLIP-XL.bin"
+        self.videoclip_model_path = "/gemini/space/wyb/model/arena_model/VideoCLIP-XL/VideoCLIP-XL.bin"
         self.v_mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
         self.v_std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
         
@@ -847,7 +848,7 @@ class VideophyRewardModelWorker():
     # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, media_tokens = ["<image>", "<|video|>"]):
         # self.checkpoint = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/videocon_physics"
-        self.checkpoint = "/root/arena_models/videocon_physics"
+        self.checkpoint = "/gemini/space/wyb/model/arena_model/videocon_physics"
         self.max_length = 256
         self._build_model()
         self.media_tokens = {k: -int(i + 1) for i, k in enumerate(media_tokens)}
@@ -1266,12 +1267,11 @@ class VideophyRewardModelWorker():
         
         # return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
         return DataProto(batch=batch)
-   
+ 
 class MultiRewardModelWorker(RewardModelWorker):
     """
     聚合 Aesthetic, RAFT, Videoclip, Videophy 四种 RewardModelWorker
     """
-
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         # 初始化各个 reward worker
@@ -1292,11 +1292,25 @@ class MultiRewardModelWorker(RewardModelWorker):
             batch_keys=['video_frames'],
             non_tensor_batch_keys=["caption"],
         )        
+        streams = [torch.cuda.Stream() for _ in range(4)]
+             
         # 分别调用各个 reward worker 的 compute_rm_score
+        with torch.cuda.stream(streams[0]):
+            aes_result = self.aesthetic_worker.compute_rm_score(datas)
+        with torch.cuda.stream(streams[1]):
+            raft_result = self.raft_worker.compute_rm_score(datas)
+        with torch.cuda.stream(streams[2]):
+            videoclip_result = self.videoclip_worker.compute_rm_score(datas)
+        with torch.cuda.stream(streams[3]):
+            videophy_result = self.videophy_worker.compute_rm_score(datas)
+        torch.cuda.synchronize()
+
         aes_result = self.aesthetic_worker.compute_rm_score(datas)
         raft_result = self.raft_worker.compute_rm_score(datas)
         videoclip_result = self.videoclip_worker.compute_rm_score(datas)
         videophy_result = self.videophy_worker.compute_rm_score(datas)
+        torch.cuda.synchronize()
+        
 
         # 合并结果
         batch = TensorDict(

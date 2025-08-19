@@ -1,4 +1,4 @@
-MODEL_PATH="/nvfile-heatstorage/model_zoo/Wan2___1-T2V-1___3B"
+MODEL_PATH="/gemini/space/wyb/model/Wan2___1-T2V-1___3B"
 OUTPUT_DIR="data/rl_embeddings"
 
 python examples/data_preprocess/preprocess_wan_data.py \

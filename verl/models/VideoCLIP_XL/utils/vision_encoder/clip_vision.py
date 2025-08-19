@@ -91,11 +91,10 @@ class Transformer(nn.Module):
                 x = blk(x)
         return x
 
-
 class VisionTransformer(nn.Module):
     def __init__(
         self, input_resolution, patch_size, width, layers, heads, output_dim=None, 
-        kernel_size=1, num_frames=8, drop_path=0, checkpoint_num=0, dropout=0.,
+        kernel_size=1, num_frames=5, drop_path=0, checkpoint_num=0, dropout=0.,
         temp_embed=True,
     ):
         super().__init__()
