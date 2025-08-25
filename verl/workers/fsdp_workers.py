@@ -128,11 +128,17 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         # build device mesh for Ulysses Sequence Parallel
         self.ulysses_device_mesh = None
         self.ulysses_sequence_parallel_size = self.config.actor.get("ulysses_sequence_parallel_size", 1)
+        self.rollout_ulysses_sequence_parallel_size = self.config.rollout.get("ulysses_sequence_parallel_size", 1)
         dp = world_size // self.ulysses_sequence_parallel_size
         if self.ulysses_sequence_parallel_size > 1:
             self.ulysses_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, self.ulysses_sequence_parallel_size), mesh_dim_names=["dp", "sp"])
-
+        
+        if self.rollout_ulysses_sequence_parallel_size > 1:
+            self.rollout_ulysses_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, self.rollout_ulysses_sequence_parallel_size), mesh_dim_names=["dp", "sp"])
+            
         self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
+        self.rollout_ulysses_sharding_manager = FSDPUlyssesShardingManager(self.rollout_ulysses_device_mesh)
+        
         self._lora_rank = self.config.model.get("lora_rank", 0)
         self._is_lora = self._lora_rank > 0
 
@@ -731,16 +737,17 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         }
         prompts.meta_info.update(meta_info)
         timing_generate = {}
-        with self.rollout_sharding_manager:
-            log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
+        with self.rollout_ulysses_sharding_manager:
+            with self.rollout_sharding_manager:
+                log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
 
-            prompts = self.rollout_sharding_manager.preprocess_data(prompts)
-            with simple_timer("generate_sequences", timing_generate):
-                output = self.rollout.generate_sequences(prompts=prompts)
+                prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+                with simple_timer("generate_sequences", timing_generate):
+                    output = self.rollout.generate_sequences(prompts=prompts)
 
-            log_gpu_memory_usage("After rollout generation", logger=logger)
+                log_gpu_memory_usage("After rollout generation", logger=logger)
 
-            output = self.rollout_sharding_manager.postprocess_data(output)
+                output = self.rollout_sharding_manager.postprocess_data(output)
 
         timing_generate.update(self.rollout_sharding_manager.timing)
         # We calculate the average timing across all ranks
