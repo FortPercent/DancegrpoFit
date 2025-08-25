@@ -173,7 +173,6 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                         # We first compute the scores using reward model. Then, we call reward_fn to combine
                         # the results from reward model and rule-based results.
                         if self.use_rm:
-                            # Calculate the HPS
                             with torch.amp.autocast('cuda'):
                                 print(f"reward gen_batch_output.batch['video_frames'].shape: {gen_batch_output.batch['video_frames'].shape}")
 
