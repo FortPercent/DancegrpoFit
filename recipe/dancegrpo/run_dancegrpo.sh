@@ -24,7 +24,7 @@ filter_groups_metric=acc
 max_num_gen_batches=10
 train_prompt_bsz=4
 gen_prompt_bsz=$((train_prompt_bsz * 1))
-n_resp_per_prompt=4
+n_resp_per_prompt=6
 train_prompt_mini_bsz=1
 
 # Ray
@@ -76,7 +76,7 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     actor_rollout_ref.h=480 \
     actor_rollout_ref.w=832 \
     actor_rollout_ref.num_frames=10 \
-    actor_rollout_ref.sampling_steps=16 \
+    actor_rollout_ref.sampling_steps=8 \
     actor_rollout_ref.actor.eta=0.3 \
     actor_rollout_ref.lr_warmup_steps=0 \
     actor_rollout_ref.use_hpsv2=True \

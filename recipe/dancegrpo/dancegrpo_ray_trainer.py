@@ -116,7 +116,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
 
                 new_batch: DataProto = DataProto.from_single_dict(batch_dict)
                 num_gen_batches += 1
-                
+                print(f"new_batch.batch['context'].shape: {new_batch.batch['context'].shape}")
                 # pop those keys for generation TODO!!!
                 if self.config.trainer.type=="diffusion":
                     # print("non-tensor keys:", new_batch.non_tensor_batch_keys.keys())
@@ -124,7 +124,9 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                         batch_keys=["context","context_orig_lengths","null_context"],
                         non_tensor_batch_keys=["caption"],
                     )
+                    print(f"before gen_batch.batch['context'].shape: {gen_batch.batch['context'].shape}")
                     gen_batch = gen_batch.repeat(self.config.actor_rollout_ref.rollout.n)
+                    print(f"after gen_batch.batch['context'].shape: {gen_batch.batch['context'].shape}")
                 elif "multi_modal_data" in new_batch.non_tensor_batch.keys():
                     gen_batch = new_batch.pop(
                         batch_keys=["input_ids", "attention_mask", "position_ids"],
@@ -139,10 +141,12 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                 is_last_step = self.global_steps >= self.total_training_steps
 
                 with marked_timer("step", timing_raw):
+                    print(f"step gen_batch.batch['context'].shape: {gen_batch.batch['context'].shape}")
                     # generate a batch
                     with marked_timer("gen", timing_raw):
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
-
+                    print(f"gen_batch_output.batch['video_frames'].shape: {gen_batch_output.batch['video_frames'].shape}")
+                    
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                         with marked_timer("gen_max", timing_raw):
                             gen_baseline_batch = deepcopy(gen_batch)
@@ -171,29 +175,13 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                         if self.use_rm:
                             # Calculate the HPS
                             with torch.amp.autocast('cuda'):
-                                # pop操作在RewardModelWorker内部进行，不会对datas产生影响
-                                # reward_tensor = self.rm_wg.compute_rm_score(gen_batch_output)
-                                # print(f"The process aes_rm_wg is {self.aes_rm_wg.workers}")
-                                # print(f"The process raft_rm_wg is {self.raft_rm_wg.workers}")
-                                # print(f"The process videoclip_rm_wg is {self.videoclip_rm_wg.workers}")
-                                # print(f"The process videophy_rm_wg is {self.videophy_rm_wg.workers}")
-                                # exit()
-                                                         
-                                # 依次调用
-                                # aes_reward_tensor = self.aes_rm_wg.compute_rm_score(gen_batch_output)
-                                # raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
-                                # videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
-                                # videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
-                                # # 打印测评分数
-                                # aes_reward_tensor.print_data_proto("aes_reward")             
-                                # new_batch = gen_batch_output.union(reward_tensor)
-                                # new_batch = gen_batch_output.union(aes_reward_tensor)
-                                # new_batch.union(raft_reward_tensor)
-                                # new_batch.union(videoclip_reward_tensor)
-                                # new_batch.union(videophy_reward_tensor)
+                                print(f"reward gen_batch_output.batch['video_frames'].shape: {gen_batch_output.batch['video_frames'].shape}")
 
-                                multi_rewrd_tensor = self.multi_rm_wg.compute_rm_score(gen_batch_output)
-                                new_batch = gen_batch_output.union(multi_rewrd_tensor)
+                                multi_reward_tensor = self.multi_rm_wg.compute_rm_score(gen_batch_output)
+                                
+                                print(f"reward multi_reward_tensor.batch['aes_rewards'].shape: {multi_reward_tensor.batch['aes_rewards'].shape}")
+                                
+                                new_batch = gen_batch_output.union(multi_reward_tensor)
                                 
                                 aes_reward_score = new_batch.batch["aes_rewards"]         
                                 raft_reward_score = new_batch.batch["raft_rewards"]       
@@ -209,7 +197,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                     },
                                     batch_size=avg_reward_score.shape[0]
                                 )
-                                reward_non_tensor_batch = multi_rewrd_tensor.non_tensor_batch
+                                reward_non_tensor_batch = multi_reward_tensor.non_tensor_batch
                                 avg_reward_tensor = DataProto(batch=avg_reward_batch, non_tensor_batch=reward_non_tensor_batch)
                                                                                    
                                 new_batch.union(avg_reward_tensor)
