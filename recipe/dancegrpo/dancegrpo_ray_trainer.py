@@ -134,12 +134,15 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
 
                     def sd3_time_shift(shift, x):
                         return (shift * x) / (1 + (shift - 1) * x)
-
+                    
+                    print("config.actor_rollout_ref.shift",self.config.actor_rollout_ref.shift)
                     for i in range(new_batch.batch.batch_size[0]):  # 注意：这里用 gen_batch，不是 new_batch
                         # 这两个其实对所有样本都一样，放在循环外算一次也行
+                        
                         sigma_schedule = torch.linspace(1, 0, S + 1)
+                        
                         sigma_schedule = sd3_time_shift(self.config.actor_rollout_ref.shift, sigma_schedule)   # [S+1]
-
+                        
                         sigma_schedule_B[i] = sigma_schedule
 
                         input_latents[i] = torch.randn(latent_shape, dtype=latent_dtype)

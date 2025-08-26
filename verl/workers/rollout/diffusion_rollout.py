@@ -53,87 +53,97 @@ class DiffusionRollout(BaseRollout):
 
     def generate_sequences(self, prompts: DataProto) -> DataProto:
         
-        num_frames = self.config.num_frames
-        size = (self.config.w, self.config.h)
-        sample_steps = self.config.sampling_steps
+        # num_frames = self.config.num_frames
+        # size = (self.config.w, self.config.h)
+        # sample_steps = self.config.sampling_steps
 
-        sigma_schedule = torch.linspace(1, 0, self.config.sampling_steps + 1)
+        # sigma_schedule = torch.linspace(1, 0, self.config.sampling_steps + 1)
         
-        def sd3_time_shift(shift, num_frames):
-            return (shift * num_frames) / (1 + (shift - 1) * num_frames)
+        # def sd3_time_shift(shift, num_frames):
+        #     return (shift * num_frames) / (1 + (shift - 1) * num_frames)
  
-        sigma_schedule = sd3_time_shift(self.config.shift, sigma_schedule)
+        # sigma_schedule = sd3_time_shift(self.config.shift, sigma_schedule)
                
-        def assert_eq(x, y, msg=None):
-            assert x == y, f"{msg or 'Assertion failed'}: {x} != {y}"
+        # def assert_eq(x, y, msg=None):
+        #     assert x == y, f"{msg or 'Assertion failed'}: {x} != {y}"
 
         context=prompts.batch['context']
         context_orig_lengths = prompts.batch['context_orig_lengths']
         caption=prompts.non_tensor_batch['caption']
         neg_context = prompts.batch['null_context']
-
-        B = len(caption)
+        sigma_schedule = prompts.batch["sigma_schedule"]
+        input_latents = prompts.batch["input_latents"]
+        latent_shape=input_latents[0].shape
+        patch_size = [1, 2, 2]
+        seq_len = math.ceil(
+                (latent_shape[2] * latent_shape[3]) / (patch_size[1] * patch_size[2]) * latent_shape[1]
+            )
+        # gen_batch.batch["input_latents"]  = input_latents
+        B = prompts.batch.batch_size[0]
         
-        # B = caption.shape[0]
-        assert_eq(
-            len(sigma_schedule),
-            sample_steps + 1,
-            "sigma_schedule must have length sample_steps + 1",
-        )
+        # # B = caption.shape[0]
+        # assert_eq(
+        #     len(sigma_schedule),
+        #     sample_steps + 1,
+        #     "sigma_schedule must have length sample_steps + 1",
+        # )
 
         all_latents = []
         all_log_probs = []
         all_video_frames = []
         all_sigma_schedule = []
         # VAE参数
-        vae_stride = [4, 8, 8]
-        patch_size = [1, 2, 2]
+        # vae_stride = [4, 8, 8]
+        # patch_size = [1, 2, 2]
         # 根据是否使用FP16选择数据类型
 
-        batch_size=1
-        batch_indices = torch.chunk(torch.arange(B), B // batch_size)
-        latent_dtype = torch.float16 
-        #TODO 是不是要broadcast timesteps和noise？
-        if self.config.init_same_noise:
-            latent_shape = (
-                16,
-                (num_frames - 1) // vae_stride[0] + 1,
-                size[1] // vae_stride[1],
-                size[0] // vae_stride[2]
-            )
-            input_latents = torch.randn(latent_shape, device=get_device_id(), dtype=latent_dtype)
-
+        # batch_size=1
+        batch_indices = torch.chunk(torch.arange(B), B // self.config.rollout.ulysses_sequence_parallel_size)
+        # latent_dtype = torch.float16 
+        # #TODO 是不是要broadcast timesteps和noise？
+        # if self.config.init_same_noise:
+        #     latent_shape = (
+        #         16,
+        #         (num_frames - 1) // vae_stride[0] + 1,
+        #         size[1] // vae_stride[1],
+        #         size[0] // vae_stride[2]
+        #     )
+        #     input_latents = torch.randn(latent_shape, device=get_device_id(), dtype=latent_dtype)
+        
+        # print("[DEBUG],input_latents",type(input_latents),input_latents.shape)
+        # exit(0)
         for index, batch_idx in enumerate(batch_indices):
-
             batch_captions = [caption[i] for i in batch_idx]
             batch_contexts = [context[i].to(get_device_id()) for i in batch_idx]
             batch_neg_context = [neg_context[i].to(get_device_id()) for i in batch_idx]
             batch_context_orig_lengths = [context_orig_lengths[i] for i in batch_idx]
+            batch_input_latents = [input_latents[i] for i in batch_idx]
+            # batch_sigma_schedule = [sigma_schedule[i] for i in batch_idx]
 
             for i in range(len(batch_contexts)):
                 batch_contexts[i] = batch_contexts[i][:batch_context_orig_lengths[i]]
 
-            if not self.config.init_same_noise:
-                latent_shape = (
-                    16,
-                    (num_frames - 1) // vae_stride[0] + 1,
-                    size[1] // vae_stride[1],
-                    size[0] // vae_stride[2]
-                )
-                input_latents = torch.randn(latent_shape, device=get_device_id(), dtype=latent_dtype)
+            # if not self.config.init_same_noise:
+            #     latent_shape = (
+            #         16,
+            #         (num_frames - 1) // vae_stride[0] + 1,
+            #         size[1] // vae_stride[1],
+            #         size[0] // vae_stride[2]
+            #     )
+            #     input_latents = torch.randn(latent_shape, device=get_device_id(), dtype=latent_dtype)
 
-            seq_len = math.ceil(
-                (latent_shape[2] * latent_shape[3]) / (patch_size[1] * patch_size[2]) * latent_shape[1]
-            )
+            # seq_len = math.ceil(
+            #     (latent_shape[2] * latent_shape[3]) / (patch_size[1] * patch_size[2]) * latent_shape[1]
+            # )
 
             grpo_sample = True
             progress_bar = tqdm(range(0, self.config.sampling_steps), desc="WAN Sampling Progress")
 
             with torch.no_grad(): 
                 _, final_latents, batch_latents, batch_log_probs = self.run_wan_sample_step(
-                    [input_latents],
+                    batch_input_latents,
                     progress_bar,
-                    sigma_schedule,
+                    sigma_schedule[0],
                     self.module,
                     batch_contexts,
                     batch_neg_context,
@@ -147,7 +157,7 @@ class DiffusionRollout(BaseRollout):
 
             all_latents.append(batch_latents.unsqueeze(0))
             all_log_probs.append(batch_log_probs.unsqueeze(0))
-            all_sigma_schedule.append(sigma_schedule.unsqueeze(0))    
+            # all_sigma_schedule.append(sigma_schedule.unsqueeze(0))    
 
             autocast_dtype = torch.float16 #TODO
             with torch.autocast("cuda", dtype=autocast_dtype):
@@ -325,7 +335,8 @@ class DiffusionRollout(BaseRollout):
     ):
         """WAN采样步骤，支持(C,T,H,W)格式输入"""
         if grpo_sample:
-            all_latents = [latents[0]]  # 存储初始latent (16, 7, 64, 64)
+            all_latents = latents
+            print("[DEBUG] all_latents",type(all_latents),len(all_latents),all_latents[0].shape)
             all_log_probs = []
             
             for i in progress_bar:
@@ -335,6 +346,7 @@ class DiffusionRollout(BaseRollout):
                 
                 # 使用sigma值计算timestep
                 sigma = sigma_schedule[i]
+                print("[DEBUG] sigma_schedule",type(sigma_schedule),len(sigma_schedule),sigma_schedule[0].shape,"sigma",sigma)
                 timestep_value = int(sigma * 1000)
                 timestep = torch.full([B], timestep_value, device=device, dtype=torch.long)
                 
