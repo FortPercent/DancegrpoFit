@@ -21,7 +21,7 @@ import threading
 import numpy as np
 
 import torch
-import torch.distributed
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -473,18 +473,41 @@ def clip_transform(n_px):
         )
     ])
     
+def _split_batch(data: DataProto, dp_size: int, dp_rank: int) -> DataProto:
+    """
+    Split the batch for data parallelism.
+    """
+    batch_size = data.batch.batch_size
+    
+    base = batch_size // dp_size
+    rem = batch_size % dp_size
+    start = dp_rank * base + min(dp_rank, rem)
+    end = start + base + (1 if dp_rank < rem else 0)
+    
+    local_batch = data.batch[start: end]
+    local_non_tensor = {k: v[start: end] for k, v in data.non_tensor_batch.items()}
+    
+    return DataProto(batch=local_batch, non_tensor_batch=local_non_tensor)
+
+WORLD_SIZE = 4
 # AestheticRewardModelWorker is a worker that computes aesthetic scores for images.
 class AestheticRewardModelWorker():
     """
     RewardModelWorker for aesthetic score evaluation using CLIP + linear regression.
     """
 
-    # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        self.clip_model_path = "/gemini/space/wyb/model/arena_model/ViT-L-14.pt"
-        self.aes_model_path = "/gemini/space/wyb/model/arena_model/sa_0_4_vit_l_14_linear.pth"
-        # import_external_libs(self.config.model.get("external_lib", None))
-        self._build_model() 
+        self.is_active = False
+        self.aes_dp = 1
+        self.rank = dist.get_rank()
+        if self.rank < self.aes_dp:
+            self.is_active = True
+            self.clip_model_path = "/gemini/space/wyb/model/arena_model/ViT-L-14.pt"
+            self.aes_model_path = "/gemini/space/wyb/model/arena_model/sa_0_4_vit_l_14_linear.pth"
+            self._build_model() 
+        else:
+            print(f"[RANK {self.rank}] AestheticWorker is inactive")
         
     
     def _load_aesthetic_model(self, cache_folder):
@@ -505,21 +528,36 @@ class AestheticRewardModelWorker():
         num_params_2 = sum(p.numel() for p in self.aesthetic_model.parameters())
         print(f"aes_model params: {num_params_1 + num_params_2 + num_params_3}")
 
-    # @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    # @WorkerProfiler.annotate(color="brown")
-    def compute_rm_score(self, datas: DataProto):
+    @register(dispatch_mode=Dispatch.ALL_TO_ALL)
+    @WorkerProfiler.annotate(color="brown")
+    def compute_rm_score(self, data: DataProto):
+
         start_time = time.time()
-        # 读取数据，但是不删除
-        # datas=data.pop(
-        #     batch_keys=['video_frames'],
-        #     non_tensor_batch_keys=["caption"],
-        # )
-        # # (B, C, H, W)
-        # decoded_image = datas.batch['video_frames']
-        # # List of [(1, C, H, W),...,...]
-        # decoded_images = decoded_image.chunk(datas.batch.batch_size[0], dim=0)
-        # # List of [(C, H, W),...,...]
-        # decoded_images = [x.squeeze(0) for x in decoded_images]
+        datas=data.pop(
+            batch_keys=['video_frames'],
+            non_tensor_batch_keys=["caption"],
+        )
+    
+        if self.is_active == False:
+            empty_bs = datas.batch.batch_size[0] // self.aes_dp
+            print(f"[RANK {self.rank}] AestheticWorker is inactive, returning zeros")
+            dummy_rewards = torch.zeros(empty_bs, device=torch.device('cpu'))
+            batch = TensorDict(
+                {
+                    "aes_rewards": dummy_rewards,
+                },
+                batch_size = empty_bs
+            )
+            return DataProto(batch=batch)
+        
+        datas = _split_batch(datas, self.aes_dp, self.rank)
+        print(f"[RANK {self.rank}] AestheticWorker processing batch size: {datas.batch.batch_size[0]}")
+        # (B, C, H, W)
+        decoded_image = datas.batch['video_frames']
+        # List of [(1, C, H, W),...,...]
+        decoded_images = decoded_image.chunk(datas.batch.batch_size[0], dim=0)
+        # List of [(C, H, W),...,...]
+        decoded_images = [x.squeeze(0) for x in decoded_images]
         
         # (B, C, Frame, H, W)
         decoded_image = datas.batch['video_frames']
@@ -589,12 +627,20 @@ class RAFTRewardModelWorker():
     It uses a pre-trained model to evaluate the RAFT quality of images.
     """
 
-    # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @register(dispatch_mode=Dispatch.ALL_TO_ALL)
     def init_model(self, stride: int = 1):
-        self.raft_model_path = "/gemini/space/wyb/model/arena_model/raft-things.pth"
-        # self.raft_model = self._load_raft_model(self.raft_model_path)
-        self.stride = stride
-        self._build_model()
+        self.is_active = False
+        self.raft_dp = 2
+        self.rank = dist.get_rank()
+        if self.rank >= WORLD_SIZE // 2:
+            self.is_active = True
+            self.raft_model_path = "/gemini/space/wyb/model/arena_model/raft-things.pth"
+            # self.raft_model = self._load_raft_model(self.raft_model_path)
+            self.stride = stride
+            self._build_model()
+        else:
+            print(f"[RANK {self.rank}] RAFTWorker is inactive")
+            
     
     def _build_model(self):
 
@@ -649,21 +695,36 @@ class RAFTRewardModelWorker():
         res = float(np.mean(optical_flows))
         return res        
     
-    # @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    # @WorkerProfiler.annotate(color="brown")
-    def compute_rm_score(self, datas: DataProto):
+    @register(dispatch_mode=Dispatch.ALL_TO_ALL)
+    @WorkerProfiler.annotate(color="brown")
+    def compute_rm_score(self, data: DataProto):
         start_time = time.time()
         # 读取数据，但是不删除
-        # datas=data.pop(
-        #     batch_keys=['video_frames'],
-        #     non_tensor_batch_keys=["caption"],
-        # )
-        # # (B, C, H, W)
-        # decoded_image = datas.batch['video_frames']
-        # # List of [(1, C, H, W),...,...]
-        # decoded_images = decoded_image.chunk(datas.batch.batch_size[0], dim=0)
-        # # List of [(C, H, W),...,...]
-        # # decoded_images = [x.squeeze(0) for x in decoded_images]
+        datas=data.pop(
+            batch_keys=['video_frames'],
+            non_tensor_batch_keys=["caption"],
+        )
+        
+        if self.is_active == False:
+            empty_bs = datas.batch.batch_size[0] // self.raft_dp
+            print(f"[RANK {self.rank}] RAFTWorker is inactive, returning zeros")
+            dummy_rewards = torch.zeros(empty_bs, device=torch.device('cpu'))
+            batch = TensorDict(
+                {
+                    "raft_rewards": dummy_rewards,
+                },
+                batch_size = empty_bs
+            )
+            return DataProto(batch=batch)
+        
+        datas = _split_batch(datas, self.raft_dp, self.rank // 2)
+        print(f"[RANK {self.rank}] RAFTWorker processing batch size: {datas.batch.batch_size[0]}")
+        # (B, C, H, W)
+        decoded_image = datas.batch['video_frames']
+        # List of [(1, C, H, W),...,...]
+        decoded_images = decoded_image.chunk(datas.batch.batch_size[0], dim=0)
+        # List of [(C, H, W),...,...]
+        # decoded_images = [x.squeeze(0) for x in decoded_images]
 
         # (B, C, Frame, H, W)
         decoded_image = datas.batch['video_frames']
@@ -721,13 +782,19 @@ class VideoclipRewardModelWorker():
     It uses a pre-trained model to evaluate the video-clip quality of images.
     """
 
-    # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @register(dispatch_mode=Dispatch.ALL_TO_ALL)
     def init_model(self):
-        self.videoclip_model_path = "/gemini/space/wyb/model/arena_model/VideoCLIP-XL/VideoCLIP-XL.bin"
-        self.v_mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
-        self.v_std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
-        
-        self._build_model() 
+        self.is_active = False
+        self.videoclip_dp = 2
+        self.rank = dist.get_rank()
+        if self.rank < WORLD_SIZE // 2:
+            self.is_active = True
+            self.videoclip_model_path = "/gemini/space/wyb/model/arena_model/VideoCLIP-XL/VideoCLIP-XL.bin"
+            self.v_mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
+            self.v_std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
+            self._build_model() 
+        else:
+            print(f"[RANK {self.rank}] VideoclipWorker is inactive")
         
     def _build_model(self):
         from verl.models.VideoCLIP_XL.modeling import VideoCLIP_XL
@@ -770,15 +837,30 @@ class VideoclipRewardModelWorker():
         return (data / 255.0 - self.v_mean) / self.v_std    
 
 
-    # @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    # @WorkerProfiler.annotate(color="brown")
-    def compute_rm_score(self, datas: DataProto):
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @WorkerProfiler.annotate(color="brown")
+    def compute_rm_score(self, data: DataProto):
         start_time = time.time()
         # 读取数据，但是不删除
-        # datas=data.pop(
-        #     batch_keys=['video_frames'],
-        #     non_tensor_batch_keys=["caption"],
-        # )
+        datas=data.pop(
+            batch_keys=['video_frames'],
+            non_tensor_batch_keys=["caption"],
+        )
+        
+        if self.is_active == False:
+            empty_bs = datas.batch.batch_size[0] // self.videoclip_dp
+            print(f"[RANK {self.rank}] VideoclipWorker is inactive, returning zeros")
+            dummy_rewards = torch.zeros(empty_bs, device=torch.device('cpu'))
+            batch = TensorDict(
+                {
+                    "videoclip_rewards": dummy_rewards,
+                },
+                batch_size = empty_bs
+            )
+            return DataProto(batch=batch)
+        
+        datas = _split_batch(datas, self.videoclip_dp, self.rank)
+        print(f"[RANK {self.rank}] VideoclipWorker processing batch size: {datas.batch.batch_size[0]}")
         # (B, C, Frame, H, W)
         decoded_image = datas.batch['video_frames']
         # List of [(1, C, Frame, H, W),...,...]
@@ -845,14 +927,21 @@ class VideophyRewardModelWorker():
     It uses a pre-trained model to evaluate the video-phy quality of images.
     """
 
-    # @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self, media_tokens = ["<image>", "<|video|>"]):
-        # self.checkpoint = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/videocon_physics"
-        self.checkpoint = "/gemini/space/wyb/model/arena_model/videocon_physics"
-        self.max_length = 256
-        self._build_model()
-        self.media_tokens = {k: -int(i + 1) for i, k in enumerate(media_tokens)}
-        self.media_lengths = {"<image>": 1 + 64, "<|video|>": 1 + 64}     
+        self.is_active = False
+        self.videophy_dp = 4
+        self.rank = dist.get_rank()
+        if self.rank < self.videophy_dp:
+            self.is_active = True
+            # self.checkpoint = "/nvfile-heatstorage/tele_data_share/wyb/model/arena_models/videocon_physics"
+            self.checkpoint = "/gemini/space/wyb/model/arena_model/videocon_physics"
+            self.max_length = 256
+            self._build_model()
+            self.media_tokens = {k: -int(i + 1) for i, k in enumerate(media_tokens)}
+            self.media_lengths = {"<image>": 1 + 64, "<|video|>": 1 + 64}   
+        else:
+            print(f"[RANK {self.rank}] VideophyWorker is inactive")  
            
         
     def _build_model(self):
@@ -1140,24 +1229,7 @@ class VideophyRewardModelWorker():
             # print(f"Batch {index} Done")
             assert len(entail_scores) == 1
         return entail_scores[0].item()
-  
-    # def resize_video_frames(self, video_tensor, target_size=(224, 224)):
-    #     """
-    #     video_tensor: torch.Tensor, shape [B, C, T, H, W]
-    #     return: torch.Tensor, shape [B, C, T, 224, 224]
-    #     """
-    #     B, C, T, H, W = video_tensor.shape
-    #     # 把时间帧展平成 batch 维度
-    #     video_tensor = video_tensor.permute(0, 2, 1, 3, 4)  # [B, T, C, H, W]
-    #     video_tensor = video_tensor.reshape(B * T, C, H, W)  # [B*T, C, H, W]
-        
-    #     # 进行 resize
-    #     resized = F.interpolate(video_tensor, size=target_size, mode='bilinear', align_corners=False)  # [B*T, C, 224, 224]
-        
-    #     # reshape 回视频形式
-    #     resized = resized.reshape(B, T, C, *target_size)  # [B, T, C, 224, 224]
-    #     resized = resized.permute(0, 2, 1, 3, 4)  # [B, C, T, 224, 224]
-    #     return resized
+
     def resize_video_frames(self, video_tensor, target_size=(224, 224)):
         """
         video_tensor: torch.Tensor, shape [B, C, T, H, W]
@@ -1187,15 +1259,30 @@ class VideophyRewardModelWorker():
 
         return cropped    
   
-    # @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    # @WorkerProfiler.annotate(color="brown")
-    def compute_rm_score(self, datas: DataProto):
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @WorkerProfiler.annotate(color="brown")
+    def compute_rm_score(self, data: DataProto):
         start_time = time.time()
         # 读取数据，但是不删除
-        # datas=data.pop(
-        #     batch_keys=['video_frames'],
-        #     non_tensor_batch_keys=["caption"],
-        # )
+        datas=data.pop(
+            batch_keys=['video_frames'],
+            non_tensor_batch_keys=["caption"],
+        )
+        
+        if self.is_active == False:
+            empty_bs = datas.batch.batch_size[0] // self.videophy_dp
+            print(f"[RANK {self.rank}] VideophyWorker is inactive, returning zeros")
+            dummy_rewards = torch.zeros(empty_bs, device=torch.device('cpu'))
+            batch = TensorDict(
+                {
+                    "videophy_rewards": dummy_rewards,
+                },
+                batch_size = empty_bs
+            )
+            return DataProto(batch=batch)
+        
+        datas = _split_batch(datas, self.videophy_dp, self.rank)
+        print(f"[RANK {self.rank}] VideophyWorker processing batch size: {datas.batch.batch_size[0]}")
         # (B, C, Frame, H, W)
         decoded_image = datas.batch['video_frames']
         # [B, C, 224, 224]
@@ -1268,64 +1355,64 @@ class VideophyRewardModelWorker():
         # return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
         return DataProto(batch=batch)
  
-class MultiRewardModelWorker(RewardModelWorker):
-    """
-    聚合 Aesthetic, RAFT, Videoclip, Videophy 四种 RewardModelWorker
-    """
-    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def init_model(self):
-        # 初始化各个 reward worker
-        self.aesthetic_worker = AestheticRewardModelWorker()
-        self.raft_worker = RAFTRewardModelWorker()
-        self.videoclip_worker = VideoclipRewardModelWorker()
-        self.videophy_worker = VideophyRewardModelWorker()
+# class MultiRewardModelWorker(RewardModelWorker):
+#     """
+#     聚合 Aesthetic, RAFT, Videoclip, Videophy 四种 RewardModelWorker
+#     """
+#     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+#     def init_model(self):
+#         # 初始化各个 reward worker
+#         self.aesthetic_worker = AestheticRewardModelWorker()
+#         self.raft_worker = RAFTRewardModelWorker()
+#         self.videoclip_worker = VideoclipRewardModelWorker()
+#         self.videophy_worker = VideophyRewardModelWorker()
 
-        self.aesthetic_worker.init_model()
-        self.raft_worker.init_model()
-        self.videoclip_worker.init_model()
-        self.videophy_worker.init_model()
+#         self.aesthetic_worker.init_model()
+#         self.raft_worker.init_model()
+#         self.videoclip_worker.init_model()
+#         self.videophy_worker.init_model()
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    @WorkerProfiler.annotate(color="purple")
-    def compute_rm_score(self, data: DataProto):
-        datas=data.pop(
-            batch_keys=['video_frames'],
-            non_tensor_batch_keys=["caption"],
-        )        
-        print(f"datas.batch['video_frames'].shape: {datas.batch['video_frames'].shape}")
-        streams = [torch.cuda.Stream() for _ in range(4)]
+#     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+#     @WorkerProfiler.annotate(color="purple")
+#     def compute_rm_score(self, data: DataProto):
+#         datas=data.pop(
+#             batch_keys=['video_frames'],
+#             non_tensor_batch_keys=["caption"],
+#         )        
+#         print(f"datas.batch['video_frames'].shape: {datas.batch['video_frames'].shape}")
+#         streams = [torch.cuda.Stream() for _ in range(4)]
         
-        # 分别调用各个 reward worker 的 compute_rm_score
-        with torch.cuda.stream(streams[0]):
-            aes_result = self.aesthetic_worker.compute_rm_score(datas)
-        with torch.cuda.stream(streams[1]):
-            raft_result = self.raft_worker.compute_rm_score(datas)
-        with torch.cuda.stream(streams[2]):
-            videoclip_result = self.videoclip_worker.compute_rm_score(datas)
-        with torch.cuda.stream(streams[3]):
-            videophy_result = self.videophy_worker.compute_rm_score(datas)
-        torch.cuda.synchronize()
+#         # 分别调用各个 reward worker 的 compute_rm_score
+#         with torch.cuda.stream(streams[0]):
+#             aes_result = self.aesthetic_worker.compute_rm_score(datas)
+#         with torch.cuda.stream(streams[1]):
+#             raft_result = self.raft_worker.compute_rm_score(datas)
+#         with torch.cuda.stream(streams[2]):
+#             videoclip_result = self.videoclip_worker.compute_rm_score(datas)
+#         with torch.cuda.stream(streams[3]):
+#             videophy_result = self.videophy_worker.compute_rm_score(datas)
+#         torch.cuda.synchronize()
 
-        aes_result = self.aesthetic_worker.compute_rm_score(datas)
-        raft_result = self.raft_worker.compute_rm_score(datas)
-        videoclip_result = self.videoclip_worker.compute_rm_score(datas)
-        videophy_result = self.videophy_worker.compute_rm_score(datas)
-        torch.cuda.synchronize()
+#         aes_result = self.aesthetic_worker.compute_rm_score(datas)
+#         raft_result = self.raft_worker.compute_rm_score(datas)
+#         videoclip_result = self.videoclip_worker.compute_rm_score(datas)
+#         videophy_result = self.videophy_worker.compute_rm_score(datas)
+#         torch.cuda.synchronize()
         
 
-        # 合并结果
-        batch = TensorDict(
-            {
-                "aes_rewards": aes_result.batch["aes_rewards"],
-                "raft_rewards": raft_result.batch["raft_rewards"],
-                "videoclip_rewards": videoclip_result.batch["videoclip_rewards"],
-                "videophy_rewards": videophy_result.batch["videophy_rewards"],
-            },
-            batch_size=aes_result.batch.batch_size
-        )
-        non_tensor_batch = data.non_tensor_batch
-        print(f"cuda worker batch['aes_rewards'].shape: {batch['aes_rewards'].shape}")
-        return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+#         # 合并结果
+#         batch = TensorDict(
+#             {
+#                 "aes_rewards": aes_result.batch["aes_rewards"],
+#                 "raft_rewards": raft_result.batch["raft_rewards"],
+#                 "videoclip_rewards": videoclip_result.batch["videoclip_rewards"],
+#                 "videophy_rewards": videophy_result.batch["videophy_rewards"],
+#             },
+#             batch_size=aes_result.batch.batch_size
+#         )
+#         non_tensor_batch = data.non_tensor_batch
+#         print(f"cuda worker batch['aes_rewards'].shape: {batch['aes_rewards'].shape}")
+#         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
              
         
 # ================================= Async related workers =================================
