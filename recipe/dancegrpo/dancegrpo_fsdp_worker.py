@@ -227,13 +227,11 @@ class QwenRewardModelWorker(RewardModelWorker):
         rollout_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, infer_tp), mesh_dim_names=["dp", "infer_tp"])
         rollout_name = self.config.name
         
-        print("[DEBUG] rollout_name",rollout_name,"infer_tp",infer_tp)
-        
         from verl.workers.rollout.vllm_rollout import vllm_mode, vLLMRollout
         from verl.workers.sharding_manager.reward_qwen import RewardVLLMManager
         log_gpu_memory_usage(f"Before building {rollout_name} rollout", logger=logger)
         local_path = copy_to_local(self.config.model.path, use_shm=self.config.model.get("use_shm", False))
-        print("[DEBUG_PATH],local_path",local_path)
+       
         # lora_kwargs = {"lora_kwargs": {"enable_lora": True, "max_loras": 1, "max_lora_rank": self._lora_rank}} if self._is_lora else {}
         lora_kwargs = {}
         if vllm_mode == "customized":
@@ -337,7 +335,7 @@ class QwenRewardModelWorker(RewardModelWorker):
         for file_path in batch_path:
             # if file_path.is_file() and file_path.suffix.lower() in VIDEO_EXTENSIONS:
                 start_time=time.time()
-                video_path = str(file_path).replace("./","/gemini/space/ljm/Dancegrpo/")
+                video_path = str(file_path).replace("./","/gemini/space/wuxuaner/Dancegrpo/")
                 # print(f"视频地址是file://{video_path}")
                 message = [
                     {

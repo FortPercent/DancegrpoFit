@@ -92,7 +92,7 @@ class vLLMRollout(BaseRollout):
         tensor_parallel_size = self.config.get("tensor_model_parallel_size", 1)
         assert tensor_parallel_size <= torch.distributed.get_world_size(), "tensor parallel size should be less than or equal to the world size"
         max_num_batched_tokens = self.config.get("max_num_batched_tokens", 8192)
-        
+        print("max_num_batched_tokens",self.config.get("max_num_batched_tokens"))
         if kwargs.get("train_tp") is not None:
             # deployed with megatron
             import os
@@ -124,7 +124,7 @@ class vLLMRollout(BaseRollout):
             assert max_position_embeddings >= config.prompt_length + config.response_length, "model context length should be greater than total sequence length"
 
         max_model_len = int(config.max_model_len or config.prompt_length + config.response_length)
-
+        print("[DEBUG]",max_model_len,max_num_batched_tokens)
         if max_num_batched_tokens < max_model_len and self.config.enable_chunked_prefill:
             raise ValueError(
                 "Enable chunked prefill, max_num_batched_tokens is smaller than max_model_len, \
@@ -146,8 +146,9 @@ class vLLMRollout(BaseRollout):
         if config.get("limit_images", None):  # support for multi-image data
             engine_kwargs["limit_mm_per_prompt"] = {"image": config.get("limit_images")}
             
-        VIDEO_DIRECTORY = "/gemini/space/ljm/Dancegrpo/videos/output" 
+        VIDEO_DIRECTORY = "/gemini/space/wuxuaner/Dancegrpo/videos/output" 
         
+        print("max_model_len",max_model_len,"config.max_model_len",config.max_model_len, "config.prompt_length",config.prompt_length ,"config.response_length", config.response_length)
         self.inference_engine = LLM(
             model=model_path,
             enable_sleep_mode=True,
