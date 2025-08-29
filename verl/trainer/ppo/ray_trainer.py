@@ -789,10 +789,26 @@ class RayPPOTrainer:
             wg_kwargs["worker_nsight_options"] = OmegaConf.to_container(OmegaConf.select(self.config.trainer, "worker_nsight_options"))
 
         for resource_pool, class_dict in self.resource_pool_to_cls.items():
-            worker_dict_cls = create_colocated_worker_cls(class_dict=class_dict)
-            wg_dict = self.ray_worker_group_cls(resource_pool=resource_pool, ray_cls_with_init=worker_dict_cls, device_name=self.device_name, **wg_kwargs)
-            spawn_wg = wg_dict.spawn(prefix_set=class_dict.keys())
-            all_wg.update(spawn_wg)
+            # worker_dict_cls = create_colocated_worker_cls(class_dict=class_dict)
+            # wg_dict = self.ray_worker_group_cls(resource_pool=resource_pool, ray_cls_with_init=worker_dict_cls, device_name=self.device_name, **wg_kwargs)
+            # spawn_wg = wg_dict.spawn(prefix_set=class_dict.keys())
+            # all_wg.update(spawn_wg)
+            # 遍历该资源池中的每一个 worker 类 (例如 'actor', ActorCls)
+            for worker_name, worker_cls in class_dict.items():            
+                # 直接使用单个 worker_cls 来创建 WorkerGroup            
+                wg = self.ray_worker_group_cls(
+                    resource_pool=resource_pool, 
+                    ray_cls_with_init=worker_cls,  # 直接传入单个类
+                    device_name=self.device_name, 
+                    **wg_kwargs
+                )
+                
+                # --- 修改点 2: spawn 的参数调整 ---
+                # prefix_set 现在只包含当前 worker 的名字，以集合形式传入
+                spawn_wg = wg.spawn(prefix_set={worker_name})
+                
+                # 将新创建的独立 worker group 更新到总的字典中
+                all_wg.update(spawn_wg)            
 
         if self.use_critic:
             self.critic_wg = all_wg["critic"]
