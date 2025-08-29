@@ -153,8 +153,8 @@ class MplugOwlVisionEmbeddings(nn.Module):
 
         class_embeds = self.cls_token.expand(batch_size * T, 1, -1).to(image_embeds.dtype)
         embeddings = torch.cat([class_embeds, image_embeds], dim=1)
-        print(f"embeddings.shape: {embeddings.shape}")  
-        print(f"self.position_embedding.shape: {self.position_embedding.shape}")
+        # print(f"embeddings.shape: {embeddings.shape}")  
+        # print(f"self.position_embedding.shape: {self.position_embedding.shape}")
         # embeddings.shape: torch.Size([13, 2602, 1024])
         # self.position_embedding.shape: torch.Size([1, 257, 1024])
         embeddings = embeddings + self.position_embedding[:, : embeddings.size(1)].to(image_embeds.dtype)
@@ -1509,7 +1509,7 @@ class MplugOwlForConditionalGeneration(MplugOwlPreTrainedModel):
         >>> print(generated_text)
         two
         ```"""
-        print("Start MplugOwl Forward")
+        # print("Start MplugOwl Forward")
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if attention_mask is None:
@@ -1533,11 +1533,11 @@ class MplugOwlForConditionalGeneration(MplugOwlPreTrainedModel):
         text_tokens_[text_tokens_ < 0] = 1  # Not used
         inputs_embeds = self.get_input_embeddings()(text_tokens_)  # Temporally Embedding
         
-        print("Start inputs_embeds Forward")
+        # print("Start inputs_embeds Forward")
         if hasattr(self.language_model, 'transformer') and hasattr(self.language_model.transformer, 'word_embeddings_layernorm'):
             inputs_embeds = self.language_model.transformer.word_embeddings_layernorm(inputs_embeds)
 
-        print("Start pixel_values Forward")
+        # print("Start pixel_values Forward")
         if pixel_values is not None:
             image_embeds = self.vision_model(pixel_values, return_dict=True).last_hidden_state
 
@@ -1552,7 +1552,7 @@ class MplugOwlForConditionalGeneration(MplugOwlPreTrainedModel):
             )["last_hidden_state"]
             img_seq_length = query_features.shape[1]
 
-        print("Start video_pixel_values Forward")
+        # print("Start video_pixel_values Forward")
         if video_pixel_values is not None:
             video_embeds = self.vision_model(video_pixel_values, return_dict=True).last_hidden_state
 
@@ -1580,7 +1580,7 @@ class MplugOwlForConditionalGeneration(MplugOwlPreTrainedModel):
         img_idx = 0
         vid_idx = 0
         
-        print("Start video_pixel_values Forward")
+        # print("Start video_pixel_values Forward")
         for b in range(batch_size):
             start = 0
             result = []

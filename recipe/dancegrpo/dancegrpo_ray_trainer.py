@@ -55,6 +55,69 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
     data.batch["advantages"] = advantages
     return data
 
+from typing import List
+import torch
+import numpy as np
+
+@staticmethod
+def merge_worker_results(data_list: List[DataProto], dummy_key="dummy_rewards") -> DataProto:
+    """
+    拼接多个 DataProto，删除所有 tensor/ndarray 全为 0 的行
+    
+    Args:
+        data_list (List[DataProto]): 多个 DataProto
+    
+    Returns:
+        DataProto: 拼接后的 DataProto
+    """
+    if not data_list:
+        return DataProto()
+    
+    # 收集所有 key
+    all_batch_keys = set()
+    all_non_tensor_keys = set()
+    for dp in data_list:
+        if dp.batch is not None:
+            all_batch_keys.update(dp.batch.keys())
+        all_non_tensor_keys.update(dp.non_tensor_batch.keys())
+    
+    # 处理 batch
+    batch_dict = {}
+    for key in all_batch_keys:
+        tensors_to_concat = []
+        for dp in data_list:
+            if dp.batch is None or key not in dp.batch.keys():
+                continue
+            tensor = dp.batch[key]
+            # 保留非全零行
+            if tensor.ndim == 1:
+                mask = tensor != 0
+            else:
+                mask = ~(tensor.abs().sum(dim=tuple(range(1, tensor.ndim))) == 0)
+            if mask.sum() > 0:
+                tensors_to_concat.append(tensor[mask])
+        if tensors_to_concat:
+            batch_dict[key] = torch.cat(tensors_to_concat, dim=0)
+    
+    # 处理 non_tensor_batch
+    non_tensor_dict = {}
+    for key in all_non_tensor_keys:
+        arrays_to_concat = []
+        for dp in data_list:
+            if key not in dp.non_tensor_batch:
+                continue
+            arr = dp.non_tensor_batch[key]
+            if arr.ndim == 1:
+                mask = arr != 0
+            else:
+                mask = ~(arr.sum(axis=tuple(range(1, arr.ndim))) == 0)
+            arr_filtered = arr[mask] if mask.sum() > 0 else None
+            if arr_filtered is not None and len(arr_filtered) > 0:
+                arrays_to_concat.append(arr_filtered)
+        if arrays_to_concat:
+            non_tensor_dict[key] = np.concatenate(arrays_to_concat, axis=0)
+    
+    return DataProto.from_dict(tensors=batch_dict, non_tensors=non_tensor_dict)
 
 class RayDanceGRPOTrainer(RayPPOTrainer):
     """
@@ -177,18 +240,22 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                 raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
                                 videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
                                 videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
-
-                                aes_reward_score.print_data_proto("aes_reward_tensor from aes_rm_wg")
-                                raft_reward_score.print_data_proto("raft_reward_tensor from raft_rm_wg")
-                                videoclip_reward_score.print_data_proto("videoclip_reward_tensor from videoclip_rm_wg")
-                                videophy_reward_score.print_data_proto("videophy_reward_tensor from videophy_rm_wg")
-
+                                print(f"List length: {len(videophy_reward_tensor)}")
+                                print("Elements:", videophy_reward_tensor)
+                                aes_reward_tensor = merge_worker_results(aes_reward_tensor)
+                                raft_reward_tensor = merge_worker_results(raft_reward_tensor)
+                                videoclip_reward_tensor = merge_worker_results(videoclip_reward_tensor)
+                                videophy_reward_tensor = merge_worker_results(videophy_reward_tensor)
+                                
+                                aes_reward_tensor.print_data_proto("aes_reward_tensor from aes_rm_wg")
+                                raft_reward_tensor.print_data_proto("raft_reward_tensor from raft_rm_wg")
+                                videoclip_reward_tensor.print_data_proto("videoclip_reward_tensor from videoclip_rm_wg")
+                                videophy_reward_tensor.print_data_proto("videophy_reward_tensor from videophy_rm_wg")
+                                
                                 new_batch = gen_batch_output.union(aes_reward_tensor)
                                 new_batch.union(raft_reward_tensor)
                                 new_batch.union(videoclip_reward_tensor)
                                 new_batch.union(videophy_reward_tensor)
-                                
-                                
                                 
                                 aes_reward_score = new_batch.batch["aes_rewards"]         
                                 raft_reward_score = new_batch.batch["raft_rewards"]       
