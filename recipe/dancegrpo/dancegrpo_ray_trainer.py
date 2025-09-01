@@ -62,10 +62,13 @@ import numpy as np
 @staticmethod
 def merge_worker_results(data_list: List[DataProto], dummy_key="dummy_rewards") -> DataProto:
     """
-    拼接多个 DataProto，删除所有 tensor/ndarray 全为 0 的行
+    拼接多个 DataProto。
+    对于每个数据键(key)，只拼接那些自身包含非零元素的 tensor/array。
+    完全由零组成的 tensor/array 会被忽略。
     
     Args:
         data_list (List[DataProto]): 多个 DataProto
+        dummy_key (str): (此参数在当前逻辑中未使用)
     
     Returns:
         DataProto: 拼接后的 DataProto
@@ -73,52 +76,50 @@ def merge_worker_results(data_list: List[DataProto], dummy_key="dummy_rewards") 
     if not data_list:
         return DataProto()
     
-    # 收集所有 key
+    # 1. 收集所有唯一的 key
     all_batch_keys = set()
     all_non_tensor_keys = set()
     for dp in data_list:
         if dp.batch is not None:
             all_batch_keys.update(dp.batch.keys())
-        all_non_tensor_keys.update(dp.non_tensor_batch.keys())
-    
-    # 处理 batch
+        if dp.non_tensor_batch is not None:
+            all_non_tensor_keys.update(dp.non_tensor_batch.keys())
+
+    # 2. 处理 batch (PyTorch tensors)
     batch_dict = {}
     for key in all_batch_keys:
+        # 准备一个列表，只存放“有意义的”（非全零）tensors
         tensors_to_concat = []
         for dp in data_list:
-            if dp.batch is None or key not in dp.batch.keys():
-                continue
-            tensor = dp.batch[key]
-            # 保留非全零行
-            if tensor.ndim == 1:
-                mask = tensor != 0
-            else:
-                mask = ~(tensor.abs().sum(dim=tuple(range(1, tensor.ndim))) == 0)
-            if mask.sum() > 0:
-                tensors_to_concat.append(tensor[mask])
+            if dp.batch is not None and key in dp.batch:
+                tensor = dp.batch[key]
+                # 关键改动：检查这一个 tensor 是否包含非零元素
+                if torch.any(tensor != 0):
+                    # 如果包含，则将其加入待拼接列表
+                    tensors_to_concat.append(tensor)
+        
+        # 如果列表不为空（即至少有一个 tensor 是有意义的），则执行拼接
         if tensors_to_concat:
             batch_dict[key] = torch.cat(tensors_to_concat, dim=0)
-    
-    # 处理 non_tensor_batch
+            
+    # 3. 处理 non_tensor_batch (NumPy arrays)
     non_tensor_dict = {}
     for key in all_non_tensor_keys:
+        # 准备一个列表，只存放“有意义的”（非全零）arrays
         arrays_to_concat = []
         for dp in data_list:
-            if key not in dp.non_tensor_batch:
-                continue
-            arr = dp.non_tensor_batch[key]
-            if arr.ndim == 1:
-                mask = arr != 0
-            else:
-                mask = ~(arr.sum(axis=tuple(range(1, arr.ndim))) == 0)
-            arr_filtered = arr[mask] if mask.sum() > 0 else None
-            if arr_filtered is not None and len(arr_filtered) > 0:
-                arrays_to_concat.append(arr_filtered)
+            if dp.non_tensor_batch is not None and key in dp.non_tensor_batch:
+                arr = dp.non_tensor_batch[key]
+                # 关键改动：检查这一个 array 是否包含非零元素
+                if np.any(arr != 0):
+                    # 如果包含，则将其加入待拼接列表
+                    arrays_to_concat.append(arr)
+        
+        # 如果列表不为空，则执行拼接
         if arrays_to_concat:
             non_tensor_dict[key] = np.concatenate(arrays_to_concat, axis=0)
-    
+            
     return DataProto.from_dict(tensors=batch_dict, non_tensors=non_tensor_dict)
-
 class RayDanceGRPOTrainer(RayPPOTrainer):
     """
     Note that this trainer runs on the driver process on a single CPU/GPU node.
@@ -240,17 +241,19 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                 raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
                                 videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
                                 videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
-                                print(f"List length: {len(videophy_reward_tensor)}")
-                                print("Elements:", videophy_reward_tensor)
+
+                                for idx, data in enumerate(videophy_reward_tensor):
+                                    print(f"idx {idx}")
+                                    print(f"value: {data.print_data_proto(f'videophy_data_{idx}')}")                                                    
                                 aes_reward_tensor = merge_worker_results(aes_reward_tensor)
                                 raft_reward_tensor = merge_worker_results(raft_reward_tensor)
                                 videoclip_reward_tensor = merge_worker_results(videoclip_reward_tensor)
                                 videophy_reward_tensor = merge_worker_results(videophy_reward_tensor)
                                 
-                                aes_reward_tensor.print_data_proto("aes_reward_tensor from aes_rm_wg")
-                                raft_reward_tensor.print_data_proto("raft_reward_tensor from raft_rm_wg")
-                                videoclip_reward_tensor.print_data_proto("videoclip_reward_tensor from videoclip_rm_wg")
-                                videophy_reward_tensor.print_data_proto("videophy_reward_tensor from videophy_rm_wg")
+                                # aes_reward_tensor.print_data_proto("aes_reward_tensor from aes_rm_wg")
+                                # raft_reward_tensor.print_data_proto("raft_reward_tensor from raft_rm_wg")
+                                # videoclip_reward_tensor.print_data_proto("videoclip_reward_tensor from videoclip_rm_wg")
+                                # videophy_reward_tensor.print_data_proto("videophy_reward_tensor from videophy_rm_wg")
                                 
                                 new_batch = gen_batch_output.union(aes_reward_tensor)
                                 new_batch.union(raft_reward_tensor)

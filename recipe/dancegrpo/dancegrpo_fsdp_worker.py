@@ -1318,7 +1318,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
                 text_input = self._extract_text_token_from_conversation(
                     self.max_length, index
                 )
-                print("done _extract_text_token_from_conversation")
+                # print("done _extract_text_token_from_conversation")
                 inputs = {
                     "video": decoded_images[index],
                     "text": text_input,

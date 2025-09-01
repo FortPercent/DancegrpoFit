@@ -196,7 +196,7 @@ class DiffusionRollout(BaseRollout):
                             first_frame_pil = Image.fromarray(first_frame[:,:,0], mode='L')
                         
                         image_filename = f"wan_frame_rank{rank}_batch{index}_{batch_captions[0]}.png"
-                        image_path = os.path.join("/nvfile-heatstorage/tele_data_share/wyb/Dancegrpo/inference_demo/output", image_filename)
+                        image_path = os.path.join("/gemini/space/wyb/Dancegrpo/inference_demo", image_filename)
                         
                         try:
                             # first_frame_pil.save(image_path)
@@ -207,7 +207,7 @@ class DiffusionRollout(BaseRollout):
 
                         # 保存视频
                         video_filename = f"wan_video_rank{rank}_batch{index}_{batch_captions[0]}.mp4"
-                        video_path = os.path.join("/nvfile-heatstorage/tele_data_share/wyb/Dancegrpo/inference_demo/output", video_filename)
+                        video_path = os.path.join("/gemini/space/wyb/Dancegrpo/inference_demo", video_filename)
                         
                         try:
                             # 使用opencv保存视频
@@ -245,8 +245,7 @@ class DiffusionRollout(BaseRollout):
                         print(f"Unexpected video_frames shape: {video_frames.shape}")                
                 import torch.distributed as dist
                 # save_video_and_prompt(video_frames, dist.get_rank(), index)
-                # print(f"local rank: {dist.get_rank()}")
-                # print(f"batch_captions[{index}]: {batch_captions}")
+
                 
                 video_frames = torch.clamp(video_frames, 0, 1)
                 video_frames = video_frames.unsqueeze(0)

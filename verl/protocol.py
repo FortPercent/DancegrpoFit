@@ -845,7 +845,8 @@ class DataProto:
         for k, v in self.batch.items():
             print(f"  - {k}: type={type(v)}, shape={v.shape}, dtype={v.dtype}")
             print(f"    value={v if v.numel() < 10 else v.flatten()[:10]}{' ...' if v.numel() > 10 else ''}")
-
+            # print(f"    value={v}, total elements={v.numel()}")
+            
         print("\n[non_tensor_batch]:")
         for k, v in self.non_tensor_batch.items():
             print(f"  - {k}: type={type(v)}, value={v}")
