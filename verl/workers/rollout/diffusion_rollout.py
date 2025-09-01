@@ -52,20 +52,6 @@ class DiffusionRollout(BaseRollout):
         self.vae_module=vae
 
     def generate_sequences(self, prompts: DataProto) -> DataProto:
-        
-        # num_frames = self.config.num_frames
-        # size = (self.config.w, self.config.h)
-        # sample_steps = self.config.sampling_steps
-
-        # sigma_schedule = torch.linspace(1, 0, self.config.sampling_steps + 1)
-        
-        # def sd3_time_shift(shift, num_frames):
-        #     return (shift * num_frames) / (1 + (shift - 1) * num_frames)
- 
-        # sigma_schedule = sd3_time_shift(self.config.shift, sigma_schedule)
-               
-        # def assert_eq(x, y, msg=None):
-        #     assert x == y, f"{msg or 'Assertion failed'}: {x} != {y}"
 
         context=prompts.batch['context']
         context_orig_lengths = prompts.batch['context_orig_lengths']
@@ -78,63 +64,26 @@ class DiffusionRollout(BaseRollout):
         seq_len = math.ceil(
                 (latent_shape[2] * latent_shape[3]) / (patch_size[1] * patch_size[2]) * latent_shape[1]
             )
-        # gen_batch.batch["input_latents"]  = input_latents
+        
         B = prompts.batch.batch_size[0]
         
-        # # B = caption.shape[0]
-        # assert_eq(
-        #     len(sigma_schedule),
-        #     sample_steps + 1,
-        #     "sigma_schedule must have length sample_steps + 1",
-        # )
 
         all_latents = []
         all_log_probs = []
         all_video_frames = []
-        all_sigma_schedule = []
-        # VAE参数
-        # vae_stride = [4, 8, 8]
-        # patch_size = [1, 2, 2]
-        # 根据是否使用FP16选择数据类型
 
-        # batch_size=1
         batch_indices = torch.chunk(torch.arange(B), B // self.config.rollout.ulysses_sequence_parallel_size)
-        # latent_dtype = torch.float16 
-        # #TODO 是不是要broadcast timesteps和noise？
-        # if self.config.init_same_noise:
-        #     latent_shape = (
-        #         16,
-        #         (num_frames - 1) // vae_stride[0] + 1,
-        #         size[1] // vae_stride[1],
-        #         size[0] // vae_stride[2]
-        #     )
-        #     input_latents = torch.randn(latent_shape, device=get_device_id(), dtype=latent_dtype)
-        
-        # print("[DEBUG],input_latents",type(input_latents),input_latents.shape)
-        # exit(0)
+
         for index, batch_idx in enumerate(batch_indices):
             batch_captions = [caption[i] for i in batch_idx]
             batch_contexts = [context[i].to(get_device_id()) for i in batch_idx]
             batch_neg_context = [neg_context[i].to(get_device_id()) for i in batch_idx]
             batch_context_orig_lengths = [context_orig_lengths[i] for i in batch_idx]
             batch_input_latents = [input_latents[i] for i in batch_idx]
-            # batch_sigma_schedule = [sigma_schedule[i] for i in batch_idx]
 
             for i in range(len(batch_contexts)):
                 batch_contexts[i] = batch_contexts[i][:batch_context_orig_lengths[i]]
 
-            # if not self.config.init_same_noise:
-            #     latent_shape = (
-            #         16,
-            #         (num_frames - 1) // vae_stride[0] + 1,
-            #         size[1] // vae_stride[1],
-            #         size[0] // vae_stride[2]
-            #     )
-            #     input_latents = torch.randn(latent_shape, device=get_device_id(), dtype=latent_dtype)
-
-            # seq_len = math.ceil(
-            #     (latent_shape[2] * latent_shape[3]) / (patch_size[1] * patch_size[2]) * latent_shape[1]
-            # )
 
             grpo_sample = True
             progress_bar = tqdm(range(0, self.config.sampling_steps), desc="WAN Sampling Progress")
@@ -150,15 +99,10 @@ class DiffusionRollout(BaseRollout):
                     seq_len,
                     grpo_sample,
                 )
-                
-            #print("final_latents",final_latents.shape,"batch_latents",batch_latents.shape,"batch_log_probs",batch_log_probs.shape)
-            # batch_latents = batch_latents.unsqueeze(0)
-            # batch_log_probs = batch_log_probs.unsqueeze(0)
 
             all_latents.append(batch_latents.unsqueeze(0))
             all_log_probs.append(batch_log_probs.unsqueeze(0))
-            # all_sigma_schedule.append(sigma_schedule.unsqueeze(0))    
-
+           
             autocast_dtype = torch.float16 #TODO
             with torch.autocast("cuda", dtype=autocast_dtype):
                 # 确保final_latents的数据类型正确
@@ -278,8 +222,7 @@ class DiffusionRollout(BaseRollout):
                 #     index
                 # )
                 video_frames = video_frames.unsqueeze(0)
-                # print("video_frames",video_frames.shape)
-            # print("video_frames",video_frames.shape)
+                
             all_video_frames.append(video_frames)
             torch.cuda.empty_cache()
 
@@ -287,23 +230,20 @@ class DiffusionRollout(BaseRollout):
             all_latents = torch.cat(all_latents, dim=0)
             all_log_probs = torch.cat(all_log_probs, dim=0)
             all_video_frames = torch.cat(all_video_frames, dim=0)
-            all_sigma_schedule = torch.cat(all_sigma_schedule, dim=0)
         else:
             all_latents = all_latents[0]
             all_log_probs = all_log_probs[0]
             all_video_frames = all_video_frames[0]
-            all_sigma_schedule = all_sigma_schedule[0]
 
-        timestep_value = [int(sigma * 1000) for sigma in all_sigma_schedule[0].squeeze()][:self.config.sampling_steps]
+        timestep_value = [int(sigma * 1000) for sigma in sigma_schedule[0].squeeze()][:self.config.sampling_steps]
         
         timestep_values = [timestep_value[:] for _ in range(B)]
 
         timesteps =  torch.tensor(timestep_values, device=get_device_id(), dtype=torch.long)
-        # print("all_latents",all_latents.shape,"all_log_probs",all_log_probs.shape,"all_video_frames",all_video_frames.shape,"all_sigma_schedule",all_sigma_schedule.shape)
-        # exit(0)
-        # timesteps = timesteps.unsqueeze(0).repeat(B, 1,1)
+       
         latents=all_latents[:, :-1]
         next_latents=all_latents[:, 1:]
+
         batch = TensorDict(
             {
                 "context_orig_lengths":context_orig_lengths,
@@ -313,7 +253,7 @@ class DiffusionRollout(BaseRollout):
                 "next_latents": next_latents,
                 "log_probs": all_log_probs,  # we will recompute old log prob with actor
                 "video_frames": all_video_frames,
-                "sigma_schedule": all_sigma_schedule,
+                "sigma_schedule": sigma_schedule,
                 'timesteps':timesteps[:, :-1]
             },
             batch_size=B
