@@ -1361,6 +1361,10 @@ class RewardModelWorker(Worker, WorkerProfilerExtension):
                 raise NotImplementedError(f"Unknown strategy: {config.strategy}")
         return reward_module
 
+    def get_mps_percentage(self):
+        """获取并返回当前 actor 的 CUDA_MPS_ACTIVE_THREAD_PERCENTAGE 环境变量。"""
+        return os.environ.get("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE", "未设置")
+
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         # This is used to import external_lib into the huggingface systems

@@ -532,6 +532,7 @@ class AestheticRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.ALL_TO_ALL)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        print(f"  -> Actor 'aes' 的 CUDA_MPS_ACTIVE_THREAD_PERCENTAGE = {self.get_mps_percentage()}")
 
         start_time = time.time()
         datas=data.pop(
@@ -699,6 +700,8 @@ class RAFTRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.ALL_TO_ALL)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        print(f"  -> Actor 'raft' 的 CUDA_MPS_ACTIVE_THREAD_PERCENTAGE = {self.get_mps_percentage()}")
+
         start_time = time.time()
         # 读取数据，但是不删除
         datas=data.pop(
@@ -841,6 +844,7 @@ class VideoclipRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.ALL_TO_ALL)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        print(f"  -> Actor 'videoclip' 的 CUDA_MPS_ACTIVE_THREAD_PERCENTAGE = {self.get_mps_percentage()}")
         start_time = time.time()
         # 读取数据，但是不删除
         datas=data.pop(
@@ -1263,6 +1267,7 @@ class VideophyRewardModelWorker(RewardModelWorker):
     @register(dispatch_mode=Dispatch.ALL_TO_ALL)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
+        print(f"  -> Actor 'videophy' 的 CUDA_MPS_ACTIVE_THREAD_PERCENTAGE = {self.get_mps_percentage()}")
         start_time = time.time()
         # 读取数据，但是不删除
         datas=data.pop(

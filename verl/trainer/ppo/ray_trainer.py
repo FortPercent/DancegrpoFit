@@ -803,7 +803,7 @@ class RayPPOTrainer:
                 percentage = worker_percentages.get(worker_name, "100")
                 
                 # Set the environment variable using the new method
-                worker_cls.set_runtime_env({
+                worker_cls.update_runtime_env_vars({
                     "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE": percentage
                 })
                 
