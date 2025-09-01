@@ -168,10 +168,20 @@ class RayClassWithInitArgs(ClassWithInitArgs):
     """
 
     def __init__(self, cls, *args, **kwargs) -> None:
-        # self._options = kwargs.pop('options', dict())
         super().__init__(cls, *args, **kwargs)
         self._options = {}
         self._additional_resource = {}
+        # --- MODIFICATION 1: Initialize a runtime_env dictionary ---
+        self._runtime_env = {}
+
+    # --- MODIFICATION 2: Add a new method to set the runtime_env ---
+    def set_runtime_env(self, env_vars: Dict[str, str]):
+        """Sets the runtime environment for the actor, specifically for env_vars.
+
+        Args:
+            env_vars: A dictionary of environment variables to set.
+        """
+        self._runtime_env = {"env_vars": env_vars}
 
     def set_additional_resource(self, additional_resource):
         """Set additional resource requirements for the actor.
@@ -207,6 +217,11 @@ class RayClassWithInitArgs(ClassWithInitArgs):
             target_node_id = ray.get(sharing_with.get_node_id.remote())
             cuda_visible_devices = ray.get(sharing_with.get_cuda_visible_devices.remote())
             options = {"scheduling_strategy": NodeAffinitySchedulingStrategy(node_id=target_node_id, soft=False)}
+            
+            # Also pass runtime_env in the sharing scenario if it's set
+            if self._runtime_env:
+                options["runtime_env"] = self._runtime_env
+                
             return self.cls.options(**options).remote(*self.args, cuda_visible_devices=cuda_visible_devices, **self.kwargs)
 
         options = {"scheduling_strategy": PlacementGroupSchedulingStrategy(placement_group=placement_group, placement_group_bundle_index=placement_group_bundle_idx)}
@@ -220,13 +235,13 @@ class RayClassWithInitArgs(ClassWithInitArgs):
         if len(self._additional_resource) > 1:
             for k, v in self._additional_resource.items():
                 options[k] = v
+        
+        # --- MODIFICATION 3: Add the runtime_env to the actor options ---
+        if self._runtime_env:
+            options["runtime_env"] = self._runtime_env
 
-        # print("cls:", self.cls)
-        # print("args: ", self.args)
-        # print("kwargs: ", self.kwargs)
         return self.cls.options(**options).remote(*self.args, **self.kwargs)
-
-
+    
 class RayWorkerGroup(WorkerGroup):
     """A group of Ray workers that can be managed collectively.
 
