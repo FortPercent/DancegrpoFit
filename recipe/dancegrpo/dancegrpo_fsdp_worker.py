@@ -207,7 +207,7 @@ class QwenRewardModelWorker(RewardModelWorker):
         # import_external_libs(self.config.model.get("external_lib", None))
         self.reward_rollout, self.reward_rollout_sharding_manager = self._build_reward_rollout()
         from vllm import SamplingParams
-        self.sampling_params = SamplingParams(temperature=0.8, top_p=0.90)
+        self.sampling_params = SamplingParams(temperature=0.8, top_p=0.90, max_tokens = 128)
         print(f"成功初始化Qwen模型...")
         print("="*40)
         # exit(0)
@@ -236,6 +236,7 @@ class QwenRewardModelWorker(RewardModelWorker):
         lora_kwargs = {}
         if vllm_mode == "customized":
             rollout = vLLMRollout(actor_module=self.actor_module_fsdp, config=self.config.rollout, tokenizer=self.tokenizer, model_hf_config=self.actor_model_config, trust_remote_code=trust_remote_code, **lora_kwargs)
+            
         elif vllm_mode == "spmd":
             # from verl.workers.rollout.vllm_rollout import vLLMAsyncRollout
             lora_kwargs={}
@@ -315,7 +316,7 @@ class QwenRewardModelWorker(RewardModelWorker):
                 请严格按照输出格式要求，输出且只输出输出格式的内容。请依照以上标准、逻辑和格式，对视频进行结构化质量评估。
                 """
         
-    def _generate_batch_prompts(self,batch_path, max_pixels = 360*420, fps = 1.0) -> List:
+    def _generate_chat_batch_prompts(self,batch_path, max_pixels = 360*420, fps = 1.0) -> List:
         """
         generate prompts for a batch of paths.
         Args:
@@ -327,15 +328,13 @@ class QwenRewardModelWorker(RewardModelWorker):
         """
         messages=[]
         prompt = self._create_simple_prompt()
-        i=1
-        print("开始生成对话...")
         total_time=0
         logger.info(f"Starting generating batch of prompts ...")
         VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv'}
         for file_path in batch_path:
             # if file_path.is_file() and file_path.suffix.lower() in VIDEO_EXTENSIONS:
                 start_time=time.time()
-                video_path = str(file_path).replace("./","/gemini/space/wuxuaner/Dancegrpo/")
+                video_path = str(file_path).replace("./","/gemini/space/ljm/Dancegrpo/")
                 # print(f"视频地址是file://{video_path}")
                 message = [
                     {
@@ -351,14 +350,33 @@ class QwenRewardModelWorker(RewardModelWorker):
                         ],
                     }
                 ]
-                # print(f"传入的content是{message[0]['content'][0]}")
                 messages.append(message)
                 processing_time=time.time()-start_time
                 total_time+=processing_time
-                print(f"成功生成第{i}个message，用时{processing_time}")
-                
-        print(f"成功生成{len(messages)}条对话，用时{total_time}")
-        print("="*40)
+        return messages
+    
+    def _generate_batch_prompts(self,batch_id) -> List:
+        """
+        generate prompts for a batch of paths.
+        Args:
+            - batch_id: a List[str] item that consists all the paths of videos in the batch.
+            - max_pixels: default to 360*420, int
+            - fps: default to 1.0, float
+        Returns:
+            - A List[List[Dict[str,Any]]] item that each element is a List satisfying the conversation format of llm.chat method.
+        """
+        messages=[]
+        simple_prompt = self._create_simple_prompt()
+        prompt = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<|vision_start|><|video_pad|><|vision_end|>{simple_prompt}<|im_end|>\n<|im_start|>assistant\n"
+        logger.info(f"Starting generating batch of prompts ...")
+        for video_id in batch_id:
+                message = [
+                    {
+                        "prompt": prompt,
+                        'multi_modal_data': {'video':[video_id]},
+                    }
+                ]
+                messages.append(message)   
         return messages
                 
     def _parse_simple_evaluation(self, output_text: str) -> Dict[str, Any]:
@@ -451,6 +469,7 @@ class QwenRewardModelWorker(RewardModelWorker):
                 output_text = output.text
                 logger.info(f"Generated text length: {len(output_text)}")
                 logger.info(f"Generated text preview: {output_text[:200]}...")
+                
             
                 # 解析结果
                 result = self._parse_simple_evaluation(output_text)
@@ -459,63 +478,80 @@ class QwenRewardModelWorker(RewardModelWorker):
         
                 print(f"🎯 综合质量分数: {overall_score}/100")
                 # print(f"⏱️ 处理时间: {processing_time:.2f} 秒")
-                print()
-                results.append(result)
+                results.append(overall_score)  #仅保留overallscore
         return results
+
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
-        from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
-
-        # Support all hardwares
-        datas=data.pop(
-            batch_keys=['video_frames'],
-            non_tensor_batch_keys=["caption","video_paths"],
-        )
-        print("开始用llm计算得分：")
-        start_time = time.time()
-        video_paths = datas.non_tensor_batch['video_paths']
-        print(f"video_paths包含的内容是{video_paths},batch_size大小为{datas.batch.batch_size[0]}")
-        import numpy as np
-        batch_paths = np.array_split(video_paths, datas.batch.batch_size[0])
-        
-        # print(f"batch_paths包含的内容是{batch_paths}")
-        # batch_paths = [str(x.squeeze(0)) for x in batch_paths]
-        batch_paths = [list(x) for x in  batch_paths]
-        # print(f"修改后batch_paths包含内容是{batch_paths}")
-        print("--------"*5)
-        
-        batch_indices = torch.chunk(torch.arange(len(batch_paths)), len(batch_paths))
-        all_rewards = []  
-        outputs = []
-        
-        
-        # print(f"本轮需要计算{len(video_paths)}个奖励,每个batch_size大小为{len(batch_paths[0])}")
-        # self.reward_rollout.to(device=get_device_id())
+        # from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
+        datas = data.pop(
+                batch_keys=['video_frames'],
+                non_tensor_batch_keys=["caption","video_ids"],
+            )
+            
+        datas = datas.to(get_device_id())
         #TODO
         with self.reward_rollout_sharding_manager:
+            # Support all hardwares
+            
+            datas= self.reward_rollout_sharding_manager.preprocess_data(datas)
+            
+            
+            print("开始用llm计算得分：")
+            # video_paths = datas.non_tensor_batch['video_paths']
+            video_ids = datas.non_tensor_batch['video_ids']  # ids_batch
+            
+            import numpy as np
+            # batch_paths = np.array_split(video_paths, datas.batch.batch_size[0])
+            batch_ids = np.array_split(video_ids, datas.batch.batch_size[0])
+            # batch_paths = [list(x) for x in  batch_paths]
+            video_ids = [list(x) for x in video_ids]
+            
+            all_rewards = []  
             # 每个batch_path是一批video_paths的列表
             # batch_paths是很多批路径列表构成的列表
-            for batch_path in batch_paths:
-                batch_message=self._generate_batch_prompts(batch_path)
+            # log_gpu_memory_usage("After entering reward rollout sharding manager", logger=logger)
+            for batch_id in batch_ids:
+                batch_message = self._generate_batch_prompts(batch_id)
                 batch_output = []
                 for message in batch_message:
-                    output = self.reward_rollout.inference_engine.chat(message, sampling_params = self.sampling_params)
+                    output = self.reward_rollout.inference_engine.generate(message,
+                                                                           sampling_params = self.sampling_params)
+                    # with open('/gemini/space/ljm/Dancegrpo/videos/output.txt', 'a', encoding='utf-8') as f:
+                    #     f.write(f"rank {dist.get_rank()} \n output内容是{output[0].outputs}\n\n")
+               
+            # for batch_path in batch_paths:
+            #     batch_message=self._generate_chat_batch_prompts(batch_path)
+            #     batch_output = []
+            #     for message in batch_message:
+            #         output = self.reward_rollout.inference_engine.chat(message, 
+            #                                                            sampling_params = self.sampling_params)
+                    
                     batch_output.append(output)
                     
                 batch_reward = self._get_batch_reward(batch_output)
-                all_rewards.union(batch_reward)
-        all_rewards = torch.tensor(all_rewards)
-        batch = TensorDict(
-            {
-                "rewards": all_rewards,
-            },
-            batch_size = len(batch_paths)
-        )
+                
+                all_rewards = all_rewards + batch_reward
+                # print(type(all_rewards[0]),all_rewards[0])
+                # print("\n")
         
-        non_tensor_batch = data.non_tensor_batch
-        return DataProto(batch=batch, non_tensor_batch = non_tensor_batch)  
+            all_rewards = torch.tensor(all_rewards)
+            batch = TensorDict(
+                {
+                    "rewards": all_rewards,
+                },
+                batch_size = len(batch_ids)
+            )
+            
+            non_tensor_batch = data.non_tensor_batch
+            batch_reward = DataProto(batch=batch, non_tensor_batch = non_tensor_batch)
+            batch_reward = self.reward_rollout_sharding_manager.postprocess_data(batch_reward)
+            # with open('/gemini/space/ljm/Dancegrpo/videos/my_file.txt', 'a', encoding='utf-8') as f:
+            #     f.write(f"rank {dist.get_rank()} \n batch['rewards'],内容是{batch_reward.batch['rewards']}\n\n")
+                
+        return batch_reward
         
     
 # TODO(sgm): we may need to extract it to dp_reward_model.py
@@ -587,58 +623,7 @@ class DiffusionRewardModelWorker(RewardModelWorker):
         processor = get_tokenizer('ViT-H-14')
         
         return reward_module, preprocess_val,processor
-
-    def _forward_micro_batch(self, micro_batch):
-        if is_cuda_available:
-            from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-        elif is_npu_available:
-            from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
-
-        from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs
-
-        with torch.no_grad(), torch.autocast(device_type=device_name, dtype=torch.bfloat16):
-            input_ids = micro_batch["input_ids"]
-            batch_size, seqlen = input_ids.shape
-            attention_mask = micro_batch["attention_mask"]
-            position_ids = micro_batch["position_ids"]
-            if position_ids.dim() == 3:  # qwen2vl mrope
-                position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
-
-            if self.use_remove_padding:
-                input_ids_rmpad, indices, *_ = unpad_input(input_ids.unsqueeze(-1), attention_mask)  # input_ids_rmpad (total_nnz, ...)
-                input_ids_rmpad = input_ids_rmpad.transpose(0, 1)  # (1, total_nnz)
-
-                # unpad the position_ids to align the rotary
-                if position_ids.dim() == 3:
-                    position_ids_rmpad = index_first_axis(rearrange(position_ids, "c b s ... -> (b s) c ..."), indices).transpose(0, 1).unsqueeze(1)  # (3, bsz, seqlen) -> (3, 1, bsz * seqlen)
-                else:
-                    position_ids_rmpad = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1)
-
-                # pad and slice the inputs if sp > 1
-                if self.ulysses_sequence_parallel_size > 1:
-                    input_ids_rmpad, position_ids_rmpad, pad_size = ulysses_pad_and_slice_inputs(input_ids_rmpad, position_ids_rmpad, sp_size=self.ulysses_sequence_parallel_size)
-
-                # only pass input_ids and position_ids to enable flash_attn_varlen
-                output = self.reward_module(input_ids=input_ids_rmpad, attention_mask=None, position_ids=position_ids_rmpad, use_cache=False)
-                reward_rmpad = output.logits
-                reward_rmpad = reward_rmpad.squeeze(0)  # (total_nnz)
-
-                # gather output if sp > 1
-                if self.ulysses_sequence_parallel_size > 1:
-                    reward_rmpad = gather_outpus_and_unpad(reward_rmpad, gather_dim=0, unpad_dim=0, padding_size=pad_size)
-
-                # pad it back
-                rm_score = pad_input(reward_rmpad, indices=indices, batch=batch_size, seqlen=seqlen).squeeze(-1)
-            else:
-                output = self.reward_module(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, use_cache=False)
-                rm_score = output.logits  # (batch_size, seq_len, 1)
-                rm_score = rm_score.squeeze(-1)
-
-            # extract the result of the last valid token
-            eos_mask_idx = torch.argmax(position_ids * attention_mask, dim=-1)  # (bsz,)
-            rm_score = rm_score[torch.arange(batch_size), eos_mask_idx]
-            return rm_score
-
+    
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @WorkerProfiler.annotate(color="brown")
     def compute_rm_score(self, data: DataProto):
