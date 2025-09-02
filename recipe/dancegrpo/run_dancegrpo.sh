@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -xeuo pipefail
 
+rsync -av /nvfile-heatstorage/model_zoo/modelscope/Wan2___1-T2V-14B/ /Wan___1-T2V-14B/
+rm -f /etc/pip.conf /etc/xdg/pip/pip.conf /root/.pip/pip.conf /root/.config/pip/pip.conf /usr/pip.conf  && pip3 config set global.index-url http://pypi.chinatelecom.ai/simple && pip3 config set install.trusted-host pypi.chinatelecom.ai
+pip install diffusers peft==0.17.0 easydict ftfy
+
+
 project_name='Dancegrpo'
 exp_name='Dancegrpo_Wan_1__3B_720P_129'
 
@@ -51,6 +56,9 @@ actor_ppo_max_token_len=$((max_prompt_length + max_response_length))
 infer_ppo_max_token_len=$((max_prompt_length + max_response_length))
 offload=False
 gen_tp=1
+
+# export TENSORBOARD_DIR=/nvfile-heatstorage/ai_infra/code/lit117/wxy/Dancegrpo/tensorboard_log/${exp_name}
+
 
 HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     data.train_files="${TRAIN_FILE}" \
@@ -127,7 +135,7 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     reward_model.rollout.gpu_memory_utilization=0.9 \
     reward_model.rollout.max_model_len=$((max_prompt_length + max_response_length)) \
     reward_model.rollout.max_num_batched_tokens=$((max_prompt_length + max_response_length)) \
-    trainer.logger=['tensorboard'] \
+    trainer.logger=tensorboard \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
     trainer.total_training_steps=1000 \

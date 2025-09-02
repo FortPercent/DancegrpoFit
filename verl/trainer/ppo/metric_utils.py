@@ -192,19 +192,19 @@ def compute_timing_metrics(batch: DataProto, timing_raw: Dict[str, float]) -> Di
         - Other stages ("ref", "values", "adv", "update_critic", "update_actor") use all tokens
           (prompt + response)
     """
-    response_info = _compute_response_info(batch)
-    num_prompt_tokens = torch.sum(response_info["prompt_length"]).item()
-    num_response_tokens = torch.sum(response_info["response_length"]).item()
-    num_overall_tokens = num_prompt_tokens + num_response_tokens
+    # response_info = _compute_response_info(batch)
+    # num_prompt_tokens = torch.sum(response_info["prompt_length"]).item()
+    # num_response_tokens = torch.sum(response_info["response_length"]).item()
+    # num_overall_tokens = num_prompt_tokens + num_response_tokens
 
-    num_tokens_of_section = {
-        "gen": num_response_tokens,
-        **{name: num_overall_tokens for name in ["ref", "values", "adv", "update_critic", "update_actor"]},
-    }
+    # num_tokens_of_section = {
+    #     "gen": num_response_tokens,
+    #     **{name: num_overall_tokens for name in ["ref", "values", "adv", "update_critic", "update_actor"]},
+    # }
 
     return {
         **{f"timing_s/{name}": value for name, value in timing_raw.items()},
-        **{f"timing_per_token_ms/{name}": timing_raw[name] * 1000 / num_tokens_of_section[name] for name in set(num_tokens_of_section.keys()) & set(timing_raw.keys())},
+        # **{f"timing_per_token_ms/{name}": timing_raw[name] * 1000 / num_tokens_of_section[name] for name in set(num_tokens_of_section.keys()) & set(timing_raw.keys())},
     }
 
 

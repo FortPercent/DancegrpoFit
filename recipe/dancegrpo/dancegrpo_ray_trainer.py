@@ -38,6 +38,12 @@ from verl.utils.debug import marked_timer
 from verl.utils.device import get_device_id, get_device_name, get_nccl_backend
 
 
+def fprint(*args, **kwargs):
+    text = " ".join(str(a) for a in args)
+    with open("output.log", "a", encoding="utf-8") as f:
+        f.write(text + "\n")
+
+
 def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, config=None):
     datas=data.pop(
         batch_keys=['rewards'],
@@ -302,7 +308,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
 
                 # collect metrics
                 # metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
-                # metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
+                metrics.update(compute_timing_metrics(batch=new_batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 # metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
