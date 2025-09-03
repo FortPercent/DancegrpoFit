@@ -53,7 +53,7 @@ from verl.utils.fsdp_utils import (
 from verl.utils.import_utils import import_external_libs
 from verl.workers.fsdp_workers import ActorRolloutRefWorker, RewardModelWorker, create_device_mesh, get_sharding_strategy
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
-
+from PIL import Image
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
@@ -638,6 +638,8 @@ class DiffusionRewardModelWorker(RewardModelWorker):
         )
         decoded_image=datas.batch['video_frames']
         decoded_images = decoded_image.chunk(datas.batch.batch_size[0], dim=0)
+        print(decoded_image[0].shape)
+        print("="*100)
         decoded_images = [x.squeeze(0) for x in decoded_images]
         caption=datas.non_tensor_batch['caption']
         import numpy as np
@@ -645,15 +647,22 @@ class DiffusionRewardModelWorker(RewardModelWorker):
         batch_caption = [str(x.squeeze(0)) for x in batch_caption]
         batch_indices = torch.chunk(torch.arange(len(batch_caption)), len(batch_caption))
         all_rewards = []  
+        self.reward_module.to(device=get_device_id())
         for index, batch_idx in enumerate(batch_indices):
             with torch.no_grad():
-                image_path = self.image_processor.postprocess(decoded_images[index])
-                image = self.preprocess_val(image_path[0]).unsqueeze(0).to(device=get_device_id(), non_blocking=True)
+                print("decoded_images shape:", decoded_images[index].shape)
+                print("dtype:", decoded_images[index].dtype)
+                frame = decoded_images[index][:, 0, :, :]  # (C, H, W)
+                # 转换为PIL图像
+                frame_np = frame.permute(1, 2, 0).cpu().numpy()  # (H, W, C)
+                frame_np = (frame_np * 255).astype(np.uint8)
+                frame_pil = Image.fromarray(frame_np)
+                    
+                image = self.preprocess_val(frame_pil).unsqueeze(0).to(device=get_device_id(), non_blocking=True)
                 # Process the prompt
                 text = self.tokenizer([batch_caption[index]]).to(device=get_device_id(), non_blocking=True)
                 # Calculate the HPS
                 with torch.amp.autocast('cuda'):
-                    self.reward_module.to(device=get_device_id())
                     outputs = self.reward_module(image, text)
                     image_features, text_features = outputs["image_features"], outputs["text_features"]
                     logits_per_image = image_features @ text_features.T
@@ -661,7 +670,7 @@ class DiffusionRewardModelWorker(RewardModelWorker):
                 all_rewards.append(hps_score)
 
         all_rewards = torch.cat(all_rewards, dim=0)
-        all_rewards=all_rewards.to(torch.device('cpu'))
+        # all_rewards=all_rewards.to(torch.device('cpu'))
         batch = TensorDict(
             {
                 "rewards": all_rewards,
@@ -671,6 +680,7 @@ class DiffusionRewardModelWorker(RewardModelWorker):
         self.reward_module.to(torch.device('cpu'))
 
         non_tensor_batch = data.non_tensor_batch
+
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
 
 

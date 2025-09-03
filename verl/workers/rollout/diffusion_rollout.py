@@ -35,9 +35,11 @@ from verl.utils.torch_functional import get_response_mask
 from wan.modules.vae import WanVAE
 
 from .base import BaseRollout
+import logging
 
 __all__ = ['DiffusionRollout']
-
+logger = logging.getLogger(__file__)
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 class DiffusionRollout(BaseRollout):
 
     def __init__(self, module: nn.Module, config):
@@ -110,8 +112,16 @@ class DiffusionRollout(BaseRollout):
                 # 确保final_latents的数据类型正确
                 final_latents_vae = final_latents.to(dtype=autocast_dtype)
                 self.vae_module.model.to(get_device_id())
+                import time
 
+                # 记录开始时间
+                start = time.time()
                 decoded_videos = self.vae_module.decode([final_latents_vae])
+                # 记录结束时间
+                end = time.time()
+
+                # 计算耗时
+                logger.warning(f"vae decode执行完毕，耗时: {end - start:.2f} 秒")
                 video_frames = decoded_videos[0]
                 # print(f"video_frames的形状是{video_frames.shape}")
 
@@ -125,12 +135,12 @@ class DiffusionRollout(BaseRollout):
                 if video_frames.dim() == 4:
                     # 调整帧率
                     fps=15
-                    video_frames = video_frames[:, ::fps, :, :]
+                    video_id = video_frames[:, ::fps, :, :]
                     C, T, H, W = video_frames.shape
                     # print(video_frames.shape)
                         
                     # 转换为numpy格式 (T, H, W, C)
-                    video_id = video_frames.permute(1, 2, 3, 0).cpu().numpy()  # (T, H, W, C)
+                    video_id = video_id.permute(1, 2, 3, 0).cpu().numpy()  # (T, H, W, C)
                     # video_id = video_frames.cpu().numpy()
                     print(f"video_id形状为{video_id.shape}")
                     import numpy as np
