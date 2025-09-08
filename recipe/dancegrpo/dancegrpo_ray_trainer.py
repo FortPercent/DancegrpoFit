@@ -171,20 +171,36 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
         num_gen_batches = 0
         
         import threading
-        def run_in_thread(target, output_dict, key, *args, **kwargs):
-            """在线程中运行目标函数，并保存结果"""
-            result = target(*args, **kwargs)
-            output_dict[key] = result
-    
-        # 保存线程结果的字典
         reward_results = {}
-        # 定义线程
-        threads = [
-            threading.Thread(target=run_in_thread, args=(self.aes_rm_wg.compute_rm_score, reward_results, "aes", gen_batch_output)),
-            threading.Thread(target=run_in_thread, args=(self.raft_rm_wg.compute_rm_score, reward_results, "raft", gen_batch_output)),
-            threading.Thread(target=run_in_thread, args=(self.videoclip_rm_wg.compute_rm_score, reward_results, "videoclip", gen_batch_output)),
-            threading.Thread(target=run_in_thread, args=(self.videophy_rm_wg.compute_rm_score, reward_results, "videophy", gen_batch_output)),
-        ]
+        thread_inputs = {}
+        ready_events = {}
+        done_events = {}
+
+        def thread_loop(name, worker):
+            while True:
+                ready_events[name].wait()      # 等待主线程喂数据
+                ready_events[name].clear()
+                # 调用现有 worker 的 compute_rm_score
+                reward_results[name] = worker.compute_rm_score(thread_inputs[name])
+                done_events[name].set()        # 通知主线程完成
+
+        # 四个线程
+        workers = {
+            "aes": self.aes_rm_wg,
+            "raft": self.raft_rm_wg,
+            "videoclip": self.videoclip_rm_wg,
+            "videophy": self.videophy_rm_wg,
+        }
+
+        threads = []
+        for name, worker in workers.items():
+            reward_results[name] = None
+            thread_inputs[name] = None
+            ready_events[name] = threading.Event()
+            done_events[name] = threading.Event()
+            t = threading.Thread(target=thread_loop, args=(name, worker), daemon=True)
+            t.start()
+            threads.append(t)       
         
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
@@ -254,18 +270,23 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                 # raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
                                 # videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
                                 # videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
-                               
-                                # 启动所有线程
-                                for t in threads:
-                                    t.start()
+                                
+                                # 启动线程
+                                for name in workers.keys():
+                                    thread_inputs[name] = gen_batch_output
+                                    done_events[name].clear()
+                                    ready_events[name].set()
+
                                 # 等待所有线程完成
-                                for t in threads:
-                                    t.join()
-                                # 获取结果
+                                for name in workers.keys():
+                                    done_events[name].wait()
+
+                                # 取结果
                                 aes_reward_tensor = reward_results["aes"]
                                 raft_reward_tensor = reward_results["raft"]
                                 videoclip_reward_tensor = reward_results["videoclip"]
                                 videophy_reward_tensor = reward_results["videophy"]
+
 
                                 for idx, data in enumerate(videophy_reward_tensor):
                                     print(f"idx {idx}")
