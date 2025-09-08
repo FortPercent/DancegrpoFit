@@ -265,12 +265,13 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                             # Calculate the HPS
                             with torch.amp.autocast('cuda'):
                                 # pop操作在RewardModelWorker内部进行，不会对datas产生影响
-
+                                import time
+                                start_time = time.time()
                                 # aes_reward_tensor = self.aes_rm_wg.compute_rm_score(gen_batch_output)
                                 # raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
                                 # videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
                                 # videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
-                                
+
                                 # 启动线程
                                 for name in workers.keys():
                                     thread_inputs[name] = gen_batch_output
@@ -286,7 +287,9 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                                 raft_reward_tensor = reward_results["raft"]
                                 videoclip_reward_tensor = reward_results["videoclip"]
                                 videophy_reward_tensor = reward_results["videophy"]
-
+                                
+                                end_time = time.time()
+                                print(f"reward time: {end_time - start_time}s")
 
                                 for idx, data in enumerate(videophy_reward_tensor):
                                     print(f"idx {idx}")
