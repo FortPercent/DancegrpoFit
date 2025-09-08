@@ -170,8 +170,21 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
         num_prompt_in_batch = 0
         num_gen_batches = 0
         
-        import torch.distributed as dist
-        streams = None
+        import threading
+        def run_in_thread(target, output_dict, key, *args, **kwargs):
+            """在线程中运行目标函数，并保存结果"""
+            result = target(*args, **kwargs)
+            output_dict[key] = result
+    
+        # 保存线程结果的字典
+        reward_results = {}
+        # 定义线程
+        threads = [
+            threading.Thread(target=run_in_thread, args=(self.aes_rm_wg.compute_rm_score, reward_results, "aes", gen_batch_output)),
+            threading.Thread(target=run_in_thread, args=(self.raft_rm_wg.compute_rm_score, reward_results, "raft", gen_batch_output)),
+            threading.Thread(target=run_in_thread, args=(self.videoclip_rm_wg.compute_rm_score, reward_results, "videoclip", gen_batch_output)),
+            threading.Thread(target=run_in_thread, args=(self.videophy_rm_wg.compute_rm_score, reward_results, "videophy", gen_batch_output)),
+        ]
         
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
@@ -237,10 +250,22 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                             with torch.amp.autocast('cuda'):
                                 # pop操作在RewardModelWorker内部进行，不会对datas产生影响
 
-                                aes_reward_tensor = self.aes_rm_wg.compute_rm_score(gen_batch_output)
-                                raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
-                                videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
-                                videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
+                                # aes_reward_tensor = self.aes_rm_wg.compute_rm_score(gen_batch_output)
+                                # raft_reward_tensor = self.raft_rm_wg.compute_rm_score(gen_batch_output)
+                                # videoclip_reward_tensor = self.videoclip_rm_wg.compute_rm_score(gen_batch_output)
+                                # videophy_reward_tensor = self.videophy_rm_wg.compute_rm_score(gen_batch_output)     
+                               
+                                # 启动所有线程
+                                for t in threads:
+                                    t.start()
+                                # 等待所有线程完成
+                                for t in threads:
+                                    t.join()
+                                # 获取结果
+                                aes_reward_tensor = reward_results["aes"]
+                                raft_reward_tensor = reward_results["raft"]
+                                videoclip_reward_tensor = reward_results["videoclip"]
+                                videophy_reward_tensor = reward_results["videophy"]
 
                                 for idx, data in enumerate(videophy_reward_tensor):
                                     print(f"idx {idx}")
