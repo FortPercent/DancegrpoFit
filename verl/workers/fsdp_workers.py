@@ -470,6 +470,86 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
 
         return actor_module_fsdp, actor_optimizer, actor_lr_scheduler, actor_model_config
 
+    def is_hip(self):
+        return torch.version.hip is not None
+
+    def use_compile(self, model):
+        # Compile the compute-intensive portions of the model: denoising transformer / decoder
+        # is_kontext = "Kontext" in model.__class__.__name__
+
+        # Compile transformer w/o fullgraph and cudagraphs if cache-dit is enabled.
+        # The cache-dit relies heavily on dynamic Python operations to maintain the cache_context, 
+        # so it is necessary to introduce graph breaks at appropriate positions to be compatible 
+        # with torch.compile. Thus, we compile the transformer with `max-autotune-no-cudagraphs` 
+        # mode if cache-dit is enabled. Otherwise, we compile with `max-autotune` mode.
+        # is_cached = getattr(model.transformer, "_is_cached", False)
+
+        # For AMD MI300X w/ the AITER kernels, the default dynamic=None is not working as expected, giving black results.
+        # Therefore, we use dynamic=True for AMD only. This leads to a small perf penalty, but should be fixed eventually.
+        # print(model.module.blocks)
+        # exit(0) 
+        model.module.blocks = torch.compile(
+            model.module.blocks, 
+            mode="max-autotune", 
+            fullgraph=True, 
+            dynamic=True if self.is_hip() else None
+        )
+        # model.vae_module.decode = torch.compile(
+        #    model.vae_module.decode, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None
+        # )
+        # print(model.vae_module.model)
+        # exit(0)
+        model.vae_module.model.decoder = torch.compile(
+           model.vae_module.model.decoder, 
+            mode="max-autotune", 
+            fullgraph=True, 
+            dynamic=True if self.is_hip() else None
+        )
+        # warmup for a few iterations (`num_inference_steps` shouldn't matter)
+        # input_kwargs = {
+        #     "prompt": "dummy prompt to trigger torch compilation", "num_inference_steps": 4
+        # }
+        # x = torch.randn([1, 17550, 1536])
+        # kwargs = dict(
+        #     e=torch.randn([[1, 6, 1536]]),
+        #     seq_lens=torch.randn([17550]),
+        #     grid_sizes=torch.randn([[13, 30, 45]]),
+        #     freqs=torch.randn([1024, 64]),
+        #     context=torch.randn([1, 512, 1536]),
+        #     context_lens=None)
+        # if is_kontext:
+        #     input_kwargs.update({"image": Image.new("RGB", size=(1024, 1024))})
+        # for _ in range(3):
+        #     model(**input_kwargs).images[0]
+
+        return model
+        
+    def _enable_compile(self, model, compile_export_mode):
+        if compile_export_mode == "compile":
+            model = self.use_compile(model)
+        elif compile_export_mode == "export_aoti":
+            # if cache_dit_config is not None:
+            #     pipeline = use_export_aoti(
+            #         pipeline,
+            #         cache_dir=args.cache_dir,
+            #         serialize=(not args.use_cached_model),
+            #         is_timestep_distilled=is_timestep_distilled
+            #     )
+            # else:
+            #     print(
+            #         "Currently, 'cache-dit' is incompatible with 'export_aoti'. "
+            #         "Please disable 'cache-dit' and re-run the export process."
+            #     )
+            pass
+        elif args.compile_export_mode == "disabled":
+            pass
+        else:
+            raise RuntimeError(
+                "expected compile_export_mode arg to be one of {compile, export_aoti, disabled}"
+            )
+
+        return model
+
     def _build_rollout(self, trust_remote_code=False):
         from torch.distributed.device_mesh import init_device_mesh
 
@@ -575,7 +655,6 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         from verl.workers.actor import DataParallelPPOActor
-
         # This is used to import external_lib into the huggingface systems
         import_external_libs(self.config.model.get("external_lib", None))
 

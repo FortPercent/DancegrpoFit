@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -xeuo pipefail
 
-rsync -av /nvfile-heatstorage/model_zoo/modelscope/Wan2___1-T2V-14B/ /Wan___1-T2V-14B/
+# rsync -av /nvfile-heatstorage/model_zoo/modelscope/Wan2___1-T2V-14B/ /Wan___1-T2V-14B/
+rsync -av /nvfile-heatstorage/model_zoo/modelscope/Wan2.1-T2V-1.3B/ /Wan2.1-T2V-1.3B/
 rm -f /etc/pip.conf /etc/xdg/pip/pip.conf /root/.pip/pip.conf /root/.config/pip/pip.conf /usr/pip.conf  && pip3 config set global.index-url http://pypi.chinatelecom.ai/simple && pip3 config set install.trusted-host pypi.chinatelecom.ai
 pip install diffusers peft==0.17.0 easydict ftfy
 
@@ -73,12 +74,12 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     algorithm.adv_estimator=${adv_estimator} \
     algorithm.use_kl_in_reward=${use_kl_in_reward} \
     algorithm.kl_ctrl.kl_coef=${kl_coef} \
-    actor_rollout_ref.model.path='/Wan___1-T2V-14B' \
-    actor_rollout_ref.model.vae_model_path='/Wan___1-T2V-14B/Wan2.1_VAE.pth' \
+    actor_rollout_ref.model.path='/Wan2.1-T2V-1.3B' \
+    actor_rollout_ref.model.vae_model_path='/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth' \
     actor_rollout_ref.cfg=5.0 \
-    actor_rollout_ref.h=256 \
-    actor_rollout_ref.w=256 \
-    actor_rollout_ref.num_frames=5 \
+    actor_rollout_ref.h=480 \
+    actor_rollout_ref.w=720 \
+    actor_rollout_ref.num_frames=81  \
     actor_rollout_ref.sampling_steps=3 \
     actor_rollout_ref.actor.eta=0.25 \
     actor_rollout_ref.lr_warmup_steps=0 \
@@ -130,8 +131,7 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
     reward_model.enable=True \
-    reward_model.type=single \
-    reward_model.model.path='/gemini/space/wuxuaner/dancegrpo/hps_ckpt/HPS_v2.1_compressed.pt' \
+    reward_model.model.path='/nvfile-heatstorage/chatrl/public/models/Qwen2.5-VL-3B-Instruct' \
     reward_model.micro_batch_size_per_gpu=1 \
     reward_model.model.input_tokenizer=null \
     reward_model.rollout.gpu_memory_utilization=0.9 \

@@ -585,6 +585,12 @@ class WanModel(ModelMixin, ConfigMixin):
             context_lens=context_lens)
         
         for block in self.blocks:
+            # print(x.shape)
+            # print('e', kwargs["e"].shape)
+            # print('freqs', kwargs["freqs"].shape)
+            # print("context", kwargs["context"].shape)
+            # print(kwargs)
+            # exit(0)
             x = block(x=x, **kwargs)
 
         x = self.head(x=x, e=e)

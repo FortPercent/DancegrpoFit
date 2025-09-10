@@ -133,6 +133,13 @@ class DiffusionActorRolloutRefWorker(ActorRolloutRefWorker):
         if self._is_rollout:
             self.rollout, self.rollout_sharding_manager = self._build_rollout(trust_remote_code=self.config.model.get("trust_remote_code", False))
 
+        compile_export_mode = 'compile'
+        # print(self.rollout)
+        self.rollout = self._enable_compile(self.rollout, compile_export_mode)
+
+        # print(self.rollout.module)
+        # print("00000000000-000000000000")
+        # exit(0)
         if self._is_ref:
             local_path = copy_to_local(self.config.model.path, use_shm=use_shm)
             self.ref_module_fsdp = self._build_model_optimizer(
