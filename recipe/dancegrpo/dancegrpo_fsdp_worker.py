@@ -670,7 +670,7 @@ class DiffusionRewardModelWorker(RewardModelWorker):
             batch_size=len(batch_caption)
         )
         self.reward_module.to(torch.device('cpu'))
-        print("complete"*100)
+        
         return DataProto(batch=batch)
 
 

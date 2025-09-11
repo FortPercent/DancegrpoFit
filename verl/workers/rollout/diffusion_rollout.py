@@ -79,7 +79,7 @@ class DiffusionRollout(BaseRollout):
         
         grpo_sample = True
         progress_bar = tqdm(range(0, self.config.sampling_steps), desc="WAN Sampling Progress")
-            
+        self.vae_module.model.to(get_device_id())
         for index, batch_idx in enumerate(batch_indices):
             batch_captions = [caption[i] for i in batch_idx]
             batch_contexts = [context[i].to(get_device_id()) for i in batch_idx]
@@ -111,7 +111,7 @@ class DiffusionRollout(BaseRollout):
             with torch.autocast("cuda", dtype=autocast_dtype):
                 # 确保final_latents的数据类型正确
                 final_latents_vae = final_latents.to(dtype=autocast_dtype)
-                self.vae_module.model.to(get_device_id())
+                
                 import time
 
                 # 记录开始时间
@@ -121,7 +121,7 @@ class DiffusionRollout(BaseRollout):
                 end = time.time()
 
                 # 计算耗时
-                logger.warning(f"vae decode执行完毕，耗时: {end - start:.2f} 秒")
+                logger.warning(f"vae decode {batch_idx}, {final_latents_vae.shape} 执行完毕，耗时: {end - start:.2f} 秒")
                 video_frames = decoded_videos[0]
                 # print(f"video_frames的形状是{video_frames.shape}")
 

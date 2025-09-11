@@ -351,13 +351,24 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
                 # Convert config to regular Python types before creating PEFT model
                 lora_config = {"task_type": TaskType.CAUSAL_LM, "r": self.config.model.lora_rank, "lora_alpha": self.config.model.lora_alpha, "target_modules": convert_to_regular_types(self.config.model.target_modules), "bias": "none"}
                 actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
-        
+                    
         torch.distributed.barrier()
         if self.rank == 0:
             print_model_size(actor_module)
-
+            
         log_gpu_memory_usage(f"After init {role} from HF AutoModel", logger=logger)
-
+        
+        # from wan.modules.model import WanAttentionBlock
+        # for name, m in actor_module.named_modules():
+        #     if isinstance(m, WanAttentionBlock):
+        #         compiled = torch.compile(m, mode="max-autotune", dynamic=True)
+        #         # 把父模块的该叶子替换为 compiled
+        #         parent = actor_module
+        #         *parents, leaf = name.split(".")
+        #         for p in parents:
+        #             parent = getattr(parent, p)
+        #         setattr(parent, leaf, compiled)
+                
         # We wrap FSDP for rollout as well
         mixed_precision_config = fsdp_config.get("mixed_precision", None)
         if mixed_precision_config is not None:
@@ -390,12 +401,15 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         # We force turn off CPUOffload for actor because it causes incorrect results when using grad accumulation
         cpu_offload = None if role == "actor" else CPUOffload(offload_params=True)
         fsdp_strategy = self.config.actor.strategy
+        # print(actor_module)
+        # print("="*100)
+        # exit(0)
         if fsdp_strategy == "fsdp":
             actor_module_fsdp = FSDP(
                 actor_module,
                 cpu_offload=cpu_offload,
-                param_init_fn=init_fn,
-                use_orig_params=False,
+                # param_init_fn=init_fn,
+                use_orig_params=True,
                 auto_wrap_policy=auto_wrap_policy,
                 device_id=get_device_id(),
                 sharding_strategy=sharding_strategy,  # zero3
@@ -406,6 +420,10 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
             )
             from verl.utils.ulysses import register_cp_grad_reduce_hook
             register_cp_grad_reduce_hook(actor_module_fsdp)
+            
+            # compile_export_mode = 'compile'
+            
+            # actor_module_fsdp = self._enable_compile(actor_module_fsdp, compile_export_mode)
             # print(f"{torch.distributed.get_rank()},after build fsdp")
         elif fsdp_strategy == "fsdp2":
             assert CPUOffloadPolicy is not None, "PyTorch version >= 2.4 is required for using fully_shard API (FSDP2)"
@@ -433,6 +451,21 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         if enable_activation_offload:
             enable_activation_offloading(actor_module_fsdp, fsdp_strategy, enable_gradient_checkpointing)
             
+        from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import CheckpointWrapper
+        for m in actor_module_fsdp.modules():
+            if isinstance(m, FSDP):
+                inner = m._fsdp_wrapped_module  # wrapper 里的真实子图
+                for name, child in list(inner.named_modules()):
+                    if isinstance(inner, CheckpointWrapper):
+                        fsdp_or_block = inner._checkpoint_wrapped_module
+                        if isinstance(fsdp_or_block, FSDP):
+                            block = fsdp_or_block._fsdp_wrapped_module
+                            if isinstance(block, WanAttentionBlock):
+                                compiled_block = torch.compile(
+                                    block, mode="max-autotune", dynamic=True
+                                )
+                                fsdp_or_block._fsdp_wrapped_module = compiled_block
+                        
         # TODO: add more optimizer args into config
         if role == "actor" and optim_config is not None:
             from verl.utils.torch_functional import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
@@ -469,7 +502,85 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
             actor_lr_scheduler = None
 
         return actor_module_fsdp, actor_optimizer, actor_lr_scheduler, actor_model_config
+    
+    def use_compile(self, model):
+        # Compile the compute-intensive portions of the model: denoising transformer / decoder
+        # is_kontext = "Kontext" in model.__class__.__name__
 
+        # Compile transformer w/o fullgraph and cudagraphs if cache-dit is enabled.
+        # The cache-dit relies heavily on dynamic Python operations to maintain the cache_context, 
+        # so it is necessary to introduce graph breaks at appropriate positions to be compatible 
+        # with torch.compile. Thus, we compile the transformer with `max-autotune-no-cudagraphs` 
+        # mode if cache-dit is enabled. Otherwise, we compile with `max-autotune` mode.
+        # is_cached = getattr(model.transformer, "_is_cached", False)
+
+        # For AMD MI300X w/ the AITER kernels, the default dynamic=None is not working as expected, giving black results.
+        # Therefore, we use dynamic=True for AMD only. This leads to a small perf penalty, but should be fixed eventually.
+        print(model.module)
+        # exit(0) 
+        print("--------  begin torch.compile ---------------")
+        model.module = torch.compile(
+            model.module, 
+            # mode="max-autotune", 
+            # fullgraph=True, 
+            # dynamic=True if self.is_hip() else None
+        )
+        # model.vae_module.decode = torch.compile(
+        #    model.vae_module.decode, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None
+        # )
+        # print(model.vae_module.model)
+        # # exit(0)
+        # model.vae_module.model.decoder = torch.compile(
+        #    model.vae_module.model.decoder, 
+        #     # mode="max-autotune", 
+        #     # fullgraph=True, 
+        #     # dynamic=True if self.is_hip() else None
+        # )
+        # warmup for a few iterations (`num_inference_steps` shouldn't matter)
+        # input_kwargs = {
+        #     "prompt": "dummy prompt to trigger torch compilation", "num_inference_steps": 4
+        # }
+        # x = torch.randn([1, 17550, 1536])
+        # kwargs = dict(
+        #     e=torch.randn([[1, 6, 1536]]),
+        #     seq_lens=torch.randn([17550]),
+        #     grid_sizes=torch.randn([[13, 30, 45]]),
+        #     freqs=torch.randn([1024, 64]),
+        #     context=torch.randn([1, 512, 1536]),
+        #     context_lens=None)
+        # if is_kontext:
+        #     input_kwargs.update({"image": Image.new("RGB", size=(1024, 1024))})
+        # for _ in range(3):
+        #     model(**input_kwargs).images[0]
+
+        return model
+    
+    def _enable_compile(self, model, compile_export_mode):
+        if compile_export_mode == "compile":
+            model = self.use_compile(model)
+        elif compile_export_mode == "export_aoti":
+            # if cache_dit_config is not None:
+            #     pipeline = use_export_aoti(
+            #         pipeline,
+            #         cache_dir=args.cache_dir,
+            #         serialize=(not args.use_cached_model),
+            #         is_timestep_distilled=is_timestep_distilled
+            #     )
+            # else:
+            #     print(
+            #         "Currently, 'cache-dit' is incompatible with 'export_aoti'. "
+            #         "Please disable 'cache-dit' and re-run the export process."
+            #     )
+            pass
+        elif compile_export_mode == "disabled":
+            pass
+        else:
+            raise RuntimeError(
+                "expected compile_export_mode arg to be one of {compile, export_aoti, disabled}"
+            )
+
+        return model
+    
     def _build_rollout(self, trust_remote_code=False):
         from torch.distributed.device_mesh import init_device_mesh
 

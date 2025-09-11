@@ -3,7 +3,7 @@ set -xeuo pipefail
 
 project_name='Dancegrpo'
 export TIMESTAMP=$(date +"%m-%d_%H-%M-%S")
-exp_name=${project_name}_Dancegrpo_Wan_1__3B_720P_129_${TIMESTAMP}
+exp_name=${project_name}_Dancegrpo_Wan_14B_720P_129_${TIMESTAMP}
 
 adv_estimator=grpo
 
@@ -67,12 +67,12 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     algorithm.adv_estimator=${adv_estimator} \
     algorithm.use_kl_in_reward=${use_kl_in_reward} \
     algorithm.kl_ctrl.kl_coef=${kl_coef} \
-    actor_rollout_ref.model.path='/gemini/space/Wan2___1-T2V-14B' \
-    actor_rollout_ref.model.vae_model_path='/gemini/space/Wan2___1-T2V-14B/Wan2.1_VAE.pth' \
+    actor_rollout_ref.model.path='/Wan2___1-T2V-14B' \
+    actor_rollout_ref.model.vae_model_path='/Wan2___1-T2V-14B/Wan2.1_VAE.pth' \
     actor_rollout_ref.cfg=5.0 \
     actor_rollout_ref.h=480 \
-    actor_rollout_ref.w=832 \
-    actor_rollout_ref.num_frames=49 \
+    actor_rollout_ref.w=720 \
+    actor_rollout_ref.num_frames=129 \
     actor_rollout_ref.sampling_steps=16 \
     actor_rollout_ref.actor.eta=0.25 \
     actor_rollout_ref.lr_warmup_steps=0 \
@@ -139,7 +139,7 @@ HYDRA_FULL_ERROR=1 python3 -m recipe.dancegrpo.main_dancegrpo \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes="${NNODES}" \
     trainer.val_before_train=True \
-    trainer.test_freq=5 \
+    trainer.test_freq=1 \
     trainer.save_freq=200 \
     trainer.total_epochs=1 \
     trainer.default_local_dir="${CKPTS_DIR}" \

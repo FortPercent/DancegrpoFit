@@ -6,6 +6,7 @@ import torch.cuda.amp as amp
 import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
+import torch._dynamo as dynamo
 
 from verl.utils.ulysses import gate_with_cp_grad_reduce, modulate_with_cp_grad_reduce
 
@@ -95,13 +96,14 @@ class WanLayerNorm(nn.LayerNorm):
 
     def __init__(self, dim, eps=1e-6, elementwise_affine=False):
         super().__init__(dim, elementwise_affine=elementwise_affine, eps=eps)
-
+        
+    @dynamo.disable
     def forward(self, x):
         r"""
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return super().forward(x.float()).type_as(x)
+        return super().forward(x.float().contiguous()).type_as(x)
 
 
 class WanSelfAttention(nn.Module):
@@ -306,22 +308,22 @@ class WanAttentionBlock(nn.Module):
 
         # self-attention
         normed_x1= self.norm1(x).float()
-        modulated_x1 = modulate_with_cp_grad_reduce(normed_x1, e[0], e[1])
+        modulated_x1 = modulate_with_cp_grad_reduce(normed_x1, e[0], e[1]).contiguous()
         y = self.self_attn(
             modulated_x1, seq_lens, grid_sizes,
-            freqs)
+            freqs).contiguous()
         # with torch.amp.autocast(dtype=torch.float32):
-        x = gate_with_cp_grad_reduce(x, e[2], y)
+        x = gate_with_cp_grad_reduce(x, e[2], y).contiguous()
             # x = x + y * e[2]
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
-            x = x + self.cross_attn(self.norm3(x), context, context_lens)
-            modulated_x2 = modulate_with_cp_grad_reduce(self.norm2(x).float(), e[3], e[4])
-            y = self.ffn(modulated_x2)
+            x = x + self.cross_attn(self.norm3(x), context, context_lens).contiguous()
+            modulated_x2 = modulate_with_cp_grad_reduce(self.norm2(x).float(), e[3], e[4]).contiguous()
+            y = self.ffn(modulated_x2).contiguous()
             # with torch.amp.autocast(dtype=torch.float32):
                 # x = x + y * e[5]
-            x = gate_with_cp_grad_reduce(x, e[5], y)
+            x = gate_with_cp_grad_reduce(x, e[5], y).contiguous()
             
             return x
 

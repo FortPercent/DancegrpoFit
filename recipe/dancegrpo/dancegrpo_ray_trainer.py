@@ -180,6 +180,14 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                             del gen_baseline_batch, gen_baseline_output
 
                     new_batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(new_batch.batch))], dtype=object)
+                    
+                    # validate
+                    if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
+                        with marked_timer("testing", timing_raw):
+                            from verl.utils.checkpoint.checkpoint_manager import save_video_and_prompt
+                            video_frames = gen_batch_output.batch["video_frames"] 
+                            for i in range(video_frames.shape[0]):
+                                save_video_and_prompt(video_frames[i] , 0, i)
                     # repeat to align with repeated responses in rollout
                     # new_batch = new_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     # new_batch = new_batch.union(gen_batch_output)
@@ -202,6 +210,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                             reward_tensor = self.reward_fn(gen_batch_output, return_dict=True)
                             gen_batch_output = gen_batch_output.union(reward_tensor)
                             gen_batch_output.pop(batch_keys=['video_frames'])
+                    
                     # === Updating ===
                     # batch.batch["response_mask"] = compute_response_mask(batch)
 

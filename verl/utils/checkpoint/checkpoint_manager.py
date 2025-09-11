@@ -225,3 +225,30 @@ def get_checkpoint_tracker_filename(root_path: str):
     Tracker file rescords the latest chckpoint during training to restart from.
     """
     return os.path.join(root_path, "latest_checkpointed_iteration.txt")
+
+def save_video_and_prompt(video_frames, rank, index):
+    from datetime import datetime
+    import cv2
+    import numpy as np
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    assert video_frames.dim() == 4
+    C, T, H, W = video_frames.shape
+    video_np = video_frames.permute(1, 2, 3, 0).cpu().numpy()  # (T, H, W, C)
+    video_np = (video_np * 255).astype(np.uint8)
+    video_filename = f"wan_video_batch_{timestamp}_{index}.mp4"
+    video_path = os.path.join("./videos/output", video_filename)
+    os.makedirs("videos/output", exist_ok=True)
+    print(video_np.shape)
+    out = cv2.VideoWriter(video_path, 
+                          fourcc=cv2.VideoWriter_fourcc(*'mp4v'), 
+                          fps=video_np.shape[0], 
+                          frameSize=(W, H))
+    for t in range(T):
+        frame = video_np[t]  # (H, W, C)
+        if C == 3:
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        else:
+            frame_bgr = frame
+        out.write(frame_bgr)
+    out.release()
