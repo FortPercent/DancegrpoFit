@@ -133,6 +133,14 @@ class DiffusionActorRolloutRefWorker(ActorRolloutRefWorker):
         if self._is_rollout:
             self.rollout, self.rollout_sharding_manager = self._build_rollout(trust_remote_code=self.config.model.get("trust_remote_code", False))
 
+        # fhd compile vae
+        self.rollout.vae_module.model.decoder = torch.compile(
+            self.rollout.vae_module.model.decoder, 
+            mode="max-autotune-no-cudagraphs", 
+            # fullgraph=True, 
+            # dynamic=True if self.is_hip() else None
+        )
+        
         if self._is_ref:
             local_path = copy_to_local(self.config.model.path, use_shm=use_shm)
             self.ref_module_fsdp = self._build_model_optimizer(

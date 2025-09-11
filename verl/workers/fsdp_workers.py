@@ -338,6 +338,11 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
                 use_fused_kernels=use_fused_kernels,
                 fused_kernels_backend=fused_kernels_backend,
             )
+            
+            # fhd compile dit
+            compile_export_mode = 'compile'
+            actor_module = self._enable_compile(actor_module, compile_export_mode)
+            
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
             if enable_gradient_checkpointing:
@@ -422,7 +427,7 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
             register_cp_grad_reduce_hook(actor_module_fsdp)
             
             # compile_export_mode = 'compile'
-            
+
             # actor_module_fsdp = self._enable_compile(actor_module_fsdp, compile_export_mode)
             # print(f"{torch.distributed.get_rank()},after build fsdp")
         elif fsdp_strategy == "fsdp2":
@@ -451,20 +456,20 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         if enable_activation_offload:
             enable_activation_offloading(actor_module_fsdp, fsdp_strategy, enable_gradient_checkpointing)
             
-        from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import CheckpointWrapper
-        for m in actor_module_fsdp.modules():
-            if isinstance(m, FSDP):
-                inner = m._fsdp_wrapped_module  # wrapper 里的真实子图
-                for name, child in list(inner.named_modules()):
-                    if isinstance(inner, CheckpointWrapper):
-                        fsdp_or_block = inner._checkpoint_wrapped_module
-                        if isinstance(fsdp_or_block, FSDP):
-                            block = fsdp_or_block._fsdp_wrapped_module
-                            if isinstance(block, WanAttentionBlock):
-                                compiled_block = torch.compile(
-                                    block, mode="max-autotune", dynamic=True
-                                )
-                                fsdp_or_block._fsdp_wrapped_module = compiled_block
+        # from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import CheckpointWrapper
+        # for m in actor_module_fsdp.modules():
+        #     if isinstance(m, FSDP):
+        #         inner = m._fsdp_wrapped_module  # wrapper 里的真实子图
+        #         for name, child in list(inner.named_modules()):
+        #             if isinstance(inner, CheckpointWrapper):
+        #                 fsdp_or_block = inner._checkpoint_wrapped_module
+        #                 if isinstance(fsdp_or_block, FSDP):
+        #                     block = fsdp_or_block._fsdp_wrapped_module
+        #                     if isinstance(block, WanAttentionBlock):
+        #                         compiled_block = torch.compile(
+        #                             block, mode="max-autotune", dynamic=True
+        #                         )
+        #                         fsdp_or_block._fsdp_wrapped_module = compiled_block
                         
         # TODO: add more optimizer args into config
         if role == "actor" and optim_config is not None:
@@ -516,15 +521,16 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
 
         # For AMD MI300X w/ the AITER kernels, the default dynamic=None is not working as expected, giving black results.
         # Therefore, we use dynamic=True for AMD only. This leads to a small perf penalty, but should be fixed eventually.
-        print(model.module)
+        # print(model.module)
         # exit(0) 
-        print("--------  begin torch.compile ---------------")
-        model.module = torch.compile(
-            model.module, 
-            # mode="max-autotune", 
-            # fullgraph=True, 
-            # dynamic=True if self.is_hip() else None
-        )
+        # print("--------  begin torch.compile ---------------")
+        from wan.modules.model import WanAttentionBlock
+        for i, block in enumerate(model.blocks):
+            if isinstance(block, WanAttentionBlock):
+                compiled_forward = torch.compile(block.forward, mode="max-autotune-no-cudagraphs")
+                # compiled_forward = torch.compile(block.forward, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None)
+                block.forward = compiled_forward
+        
         # model.vae_module.decode = torch.compile(
         #    model.vae_module.decode, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None
         # )
@@ -749,6 +755,12 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         if self._is_rollout:
             self.rollout, self.rollout_sharding_manager = self._build_rollout(trust_remote_code=self.config.model.get("trust_remote_code", False))
 
+        # self.rollout.vae_module.model.decoder = torch.compile(
+        #     self.rollout.vae_module.model.decoder, 
+        #     mode="max-autotune-no-cudagraphs", 
+        #     # fullgraph=True, 
+        #     # dynamic=True if self.is_hip() else None
+        # )
         if self._is_ref:
             local_path = copy_to_local(self.config.model.path, use_shm=use_shm)
             self.ref_module_fsdp = self._build_model_optimizer(

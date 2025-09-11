@@ -97,7 +97,7 @@ class WanLayerNorm(nn.LayerNorm):
     def __init__(self, dim, eps=1e-6, elementwise_affine=False):
         super().__init__(dim, elementwise_affine=elementwise_affine, eps=eps)
         
-    @dynamo.disable
+    # @dynamo.disable
     def forward(self, x):
         r"""
         Args:
