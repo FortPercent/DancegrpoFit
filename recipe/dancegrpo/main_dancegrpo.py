@@ -3,6 +3,7 @@ import os
 import hydra
 
 # os.environ["RAY_DEDUP_LOGS"] = "0"
+# os.environ["TORCH_LOGS"] = "dynamo,graph,output_code"
 import ray
 
 from verl.trainer.ppo.reward import get_custom_reward_fn
@@ -157,4 +158,17 @@ class TaskRunner:
 
 
 if __name__ == "__main__":
+    # import torch
+    # import logging
+    # torch._inductor.config.debug = True
+    # torch._dynamo.config.log_level = logging.DEBUG
+    # torch.backends.cuda.matmul.allow_tf32 = False
+    # torch.backends.cudnn.allow_tf32 = False
+    # import os, uuid
+
+    # CACHE_DIR = f"./tmp/worker_{uuid.uuid4().hex}"
+    # os.environ["TORCHINDUCTOR_CACHE_DIR"] = CACHE_DIR
+    # os.environ["TORCH_COMPILE_DEBUG"] = "1"
+
+    # os.makedirs(CACHE_DIR, exist_ok=True)
     main()

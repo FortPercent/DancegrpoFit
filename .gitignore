@@ -134,3 +134,9 @@ events.*
 *.pickle
 
 *.mp4
+
+*.json
+log*
+torch_compile_debug/*
+.tmp
+*.txt

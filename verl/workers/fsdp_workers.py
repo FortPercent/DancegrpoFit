@@ -343,6 +343,27 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
             compile_export_mode = 'compile'
             actor_module = self._enable_compile(actor_module, compile_export_mode)
             
+            # device = next(actor_module.parameters()).device 
+            # data = torch.load(f"forward_inputs_{torch.distributed.get_rank()}.pt")
+            # x = [t.to(device, dtype=torch.bfloat16) for t in data["x"]] if data["x"] is not None else None
+            # t = data["t"].to(device, dtype=torch.bfloat16) if data["t"] is not None else None
+            # context = [t.to(device, dtype=torch.bfloat16) for t in data["context"]] if data["context"] is not None else None
+            # seq_len = data["seq_len"]
+            # clip_fea = data["clip_fea"].to(device, dtype=torch.bfloat16) if data["clip_fea"] is not None else None
+            # y = data["y"].to(device, dtype=torch.bfloat16) if data["y"] is not None else None
+            # with torch.enable_grad():
+            #     for i in range(3):
+            #         with torch.autocast("cuda", dtype=torch.bfloat16):
+            #             actor_module(x, t, context=context, seq_len=seq_len, clip_fea=clip_fea, y=y)
+            
+            # exit(0)
+            # print(actor_module.graph)
+            # import torch.fx as fx
+            # import torch.fx.passes.graph_drawer as gd
+            # traced = fx.symbolic_trace(actor_module)
+            # drawer = gd.FxGraphDrawer(traced, "MyModel")
+            # with open("graph.svg", "wb") as f:
+            #     f.write(drawer.get_dot_graph().create_svg())
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
             if enable_gradient_checkpointing:
@@ -525,11 +546,13 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
         # exit(0) 
         # print("--------  begin torch.compile ---------------")
         from wan.modules.model import WanAttentionBlock
-        for i, block in enumerate(model.blocks):
-            if isinstance(block, WanAttentionBlock):
-                compiled_forward = torch.compile(block.forward, mode="max-autotune-no-cudagraphs")
-                # compiled_forward = torch.compile(block.forward, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None)
-                block.forward = compiled_forward
+        with torch.enable_grad():
+            for i, block in enumerate(model.blocks):
+                if isinstance(block, WanAttentionBlock):
+                    compiled_forward = torch.compile(block.forward, mode="max-autotune-no-cudagraphs", dynamic=True)
+                    # compiled_forward = torch.compile(block.forward, mode="default")
+                    # compiled_forward = torch.compile(block.forward, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None)
+                    block.forward = compiled_forward
         
         # model.vae_module.decode = torch.compile(
         #    model.vae_module.decode, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None

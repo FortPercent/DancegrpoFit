@@ -47,6 +47,70 @@ def register_all_hooks(model):
         print(f"[REGISTER] Hooking module: {name}")
         module.register_forward_hook(save_input_hook(name))
 
+import torch
+import json
+
+hook_results = []
+hooks = []
+
+def get_shape(x):
+    """获取 tensor 或嵌套结构的 shape，列表/元组递归处理"""
+    if isinstance(x, torch.Tensor):
+        return list(x.shape)
+    elif isinstance(x, (list, tuple)):
+        return [get_shape(i) for i in x]
+    else:
+        return str(type(x))
+    
+def compute_norm_tensor(x):
+    """
+    递归计算 tensor norm
+    - 只对浮点 tensor 计算
+    - meta tensor / int tensor 返回 None
+    - list/tuple 递归处理
+    """
+    if isinstance(x, torch.Tensor):
+        if x.is_floating_point() and not x.is_meta:
+            return x.norm(dim=None)  # 返回 tensor，延迟转 float
+        else:
+            return None
+    elif isinstance(x, (list, tuple)):
+        return [compute_norm_tensor(i) for i in x]
+    else:
+        return None
+
+def type_of(x):
+    """递归获取输入输出的类型信息"""
+    if isinstance(x, torch.Tensor):
+        return str(x.dtype)
+    elif isinstance(x, (list, tuple)):
+        return [type_of(i) for i in x]
+    else:
+        return str(type(x))
+    
+def register_hooks(module, prefix=""):
+    for name, child in module.named_children():
+        layer_name = f"{prefix}.{name}" if prefix else name
+
+        def hook_fn(module, input, output, layer_name=layer_name):
+            # if layer_name == '_fsdp_wrapped_module.text_embedding.0':
+            #     logger.warning("---------------------------")
+            #     logger.warning(input)
+            #     logger.warning("---------------------------")
+            #     exit(0)   
+            hook_results.append({
+                "layer": layer_name,
+                "input_type": type_of(input),
+                "output_type": type_of(output),
+                "input_norm": compute_norm_tensor(input),
+                "output_norm": compute_norm_tensor(output)
+            })
+
+        h = child.register_forward_hook(hook_fn)
+        hooks.append(h)
+
+        register_hooks(child, prefix=layer_name)
+        
 class DiffusionDataParallelPPOActor(DataParallelPPOActor):
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
@@ -260,6 +324,8 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                 #     exit(0)
             if (batch_idx + 1) % self.gradient_accumulation == 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_module.parameters(), self.config.max_grad_norm)
+                self.actor_optimizer.step()
+                self.actor_optimizer.zero_grad()
                 data = {"actor/grad_norm": grad_norm.detach().item(),}
                 append_to_dict(metrics, data)
                 
@@ -273,6 +339,8 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
             
         return metrics
 
+
+            
     def grpo_wan_one_step(
         self,
         latents,
@@ -300,19 +368,75 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
         if latents.shape[0] != 16:
             raise ValueError(f"Expected 16 channels, got {latents.shape[0]} channels")
         
-
+        register_hooks(transformer) 
+        # exit(0)
         autocast_dtype = torch.bfloat16
         with torch.autocast("cuda", dtype=autocast_dtype):
+            # import torch
+            # import hashlib
 
+            # def tensor_md5(t) -> str:
+            #     if isinstance(t, (list, tuple)):
+            #         # 把多个 Tensor 的 md5 串起来再做一次 md5
+            #         md5_all = hashlib.md5()
+            #         for item in t:
+            #             md5_all.update(tensor_md5(item).encode())
+            #         return md5_all.hexdigest()
+            #     elif isinstance(t, torch.Tensor):
+            #         t_bytes = t.detach().cpu().numpy().tobytes()
+            #         return hashlib.md5(t_bytes).hexdigest()
+            #     else:
+            #         # 其他类型转成字符串
+            #         return hashlib.md5(str(t).encode()).hexdigest()
             # latents.to(pre_latents.device)
+            # print("------------------------------------------------")
+            # print(tensor_md5(a))
+            # print("------------------------------------------------")
+            # with torch.no_grad(): 
+            
+            # if torch.distributed.get_rank() == 0:
+            #     print(latents)
+            #     print(latents.float().norm())
+            # exit(0)
             pred_cond = transformer(
                 x=[latents],
                 t=timesteps,
                 context=context,
                 seq_len=seq_len
             )
+            print(
+                f"[Update] rank {torch.distributed.get_rank()} "
+                f"shape={tuple(latents.shape)} "
+                f"norm={latents.norm().item():.4f} "
+                f"timestep_cond norm={timesteps} "
+                f"context norm={context[0].norm().item():.4f} "
+                f"seq_len={seq_len} "
+                f"pred_cond={pred_cond[0].norm()}"
+            )
             
             # 处理条件预测输出
+            hook_results_json = []
+            def tensor_to_json_safe(x):
+                if isinstance(x, torch.Tensor):
+                    return x.detach().cpu().item()  # 标量 norm
+                elif isinstance(x, (list, tuple)):
+                    return [tensor_to_json_safe(i) for i in x]
+                else:
+                    return None
+            hook_results_json = []
+            for entry in hook_results:
+                hook_results_json.append({
+                    "layer": entry["layer"],
+                    "input_type": entry["input_type"],
+                    "output_type": entry["output_type"],
+                    "input_norm": tensor_to_json_safe(entry["input_norm"]),
+                    "output_norm": tensor_to_json_safe(entry["output_norm"])
+                })
+            with open(f"14-dp-actor-result-compile-true-grad-true-rank-{torch.distributed.get_rank()}.json", "w") as f:
+                json.dump(hook_results_json, f, indent=2)
+                
+            exit(0)
+            
             if isinstance(pred_cond, dict) and 'rgb' in pred_cond:
                 model_output_cond = pred_cond['rgb'][0]
             elif isinstance(pred_cond, list):

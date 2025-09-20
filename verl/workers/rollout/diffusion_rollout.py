@@ -40,6 +40,11 @@ import logging
 __all__ = ['DiffusionRollout']
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+
+
+        
+        
 class DiffusionRollout(BaseRollout):
 
     def __init__(self, module: nn.Module, config):
@@ -92,7 +97,7 @@ class DiffusionRollout(BaseRollout):
                 batch_contexts[i] = batch_contexts[i][:batch_context_orig_lengths[i]]
 
 
-            with torch.no_grad(): 
+            with torch.no_grad(): # fhd
                 _, final_latents, batch_latents, batch_log_probs = self.run_wan_sample_step(
                     batch_input_latents,
                     progress_bar,
@@ -103,6 +108,17 @@ class DiffusionRollout(BaseRollout):
                     seq_len,
                     grpo_sample,
                 )
+
+            # _, final_latents, batch_latents, batch_log_probs = self.run_wan_sample_step(
+            #     batch_input_latents,
+            #     progress_bar,
+            #     sigma_schedule[0],
+            #     self.module,
+            #     batch_contexts,
+            #     batch_neg_context,
+            #     seq_len,
+            #     grpo_sample,
+            # )
 
             all_latents.append(batch_latents.unsqueeze(0))
             all_log_probs.append(batch_log_probs.unsqueeze(0))
@@ -154,112 +170,7 @@ class DiffusionRollout(BaseRollout):
                 #     f.write(f"video_np形状{video_id.shape}\n")
                 #     f.write(f"{video_id}\n\n")
                 all_video_ids.append(video_id)
-                # 创建输出目录
-                # os.makedirs("./videos", exist_ok=True)
-                # os.makedirs("./images", exist_ok=True)
-                # def save_video_and_prompt(video_frames, rank, index):
-                #     """
-                #     保存视频文件和对应的prompt文本
-                #     Args:
-                #         video_frames: torch.Tensor, shape (C, T, H, W), 范围 [0, 1]
-                #         caption: str, 对应的文本prompt
-                #         rank: int, 当前进程的rank
-                #         index: int, 当前batch的索引
-                #         args: 配置参数
-                #     """
-                #     import time
-                #     from datetime import datetime
-
-                #     import cv2
-                #     import numpy as np
-                #     from PIL import Image
-
-                #     # 获取当前时间戳
-                #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    
-                #     # 确保video_frames是正确的格式 (C, T, H, W)
-                #     if video_frames.dim() == 4:
-                #         C, T, H, W = video_frames.shape
-                        
-                #         # 转换为numpy格式 (T, H, W, C)
-                #         video_np = video_frames.permute(1, 2, 3, 0).cpu().numpy()  # (T, H, W, C)
-                #         video_np = (video_np * 255).astype(np.uint8)
-                        
-                #         # 如果是单通道，扩展为3通道
-                #         if C == 1:
-                #             video_np = np.repeat(video_np, 3, axis=-1)
-                        
-                #         # 1. 保存第一帧图像
-                #         first_frame = video_np[0]  # (H, W, C)
-                        
-                #         # 保存第一帧为PNG图像
-                #         if C >= 3:
-                #             first_frame_pil = Image.fromarray(first_frame)
-                #         else:
-                #             first_frame_pil = Image.fromarray(first_frame[:,:,0], mode='L')
-                        
-                #         image_filename = f"wan_frame_rank{rank}_batch{index}_{batch_captions[0]}.png"
-                #         image_path = os.path.join("./inference_demo/output", image_filename)
-                        
-                #         try:
-                #             # first_frame_pil.save(image_path)
-                #             # print(f"First frame saved: {image_path}")
-                #             print("skip image save")
-                #         except Exception as e:
-                #             print(f"Error saving first frame {image_path}: {e}")
-
-                #         # 保存视频
-                #         video_filename = f"wan_video_rank{rank}_batch{index}_{timestamp}_{batch_captions[0]}.mp4"
-                #         video_path = os.path.join("./videos/output", video_filename)
-                #         print(video_path)
-                #         # exit(0)
-                #         # video_paths = []
-                #         try:
-                #             # 使用opencv保存视频
-                #             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                #             # fps = args.video_fps if hasattr(args, 'video_fps') else 8  # 默认8fps
-                #             fps = 5
-                #             out = cv2.VideoWriter(video_path, fourcc, fps, (W, H))
-                            
-                #             for t in range(T):
-                #                 frame = video_np[t]  # (H, W, C)
-                #                 # OpenCV使用BGR格式
-                #                 if C == 3:
-                #                     frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                #                 else:
-                #                     frame_bgr = frame
-                #                 out.write(frame_bgr)
-                            
-                #             out.release()
-                #             print(f"Video saved: {video_path}")
-                #             # video_paths.append(video_path)
-                            
-                #         except Exception as e:
-                #             print(f"Error saving video {video_path}: {e}")
-                #             # exit(0)
-                #             # 如果视频保存失败，至少保存第一帧作为图像
-                #             first_frame = video_np[0]  # (H, W, C)
-                #             if C == 3:
-                #                 first_frame_pil = Image.fromarray(first_frame)
-                #             else:
-                #                 first_frame_pil = Image.fromarray(first_frame[:,:,0], mode='L')
-                            
-                #             image_filename = f"wan_frame_rank{rank}_batch{index}_{timestamp}.png"
-                #             image_path = os.path.join("./images", image_filename)
-                #             first_frame_pil.save(image_path)
-                #             # print(f"First frame saved as image: {image_path}")
-                #         return video_path  # 返回所有video_path构成的列表 video_paths                    
-                #     else:
-                #         print(f"Unexpected video_frames shape: {video_frames.shape}")
-            
-                # local_rank = int(os.environ["LOCAL_RANK"])
-                # # 保存视频
-                # video_path = save_video_and_prompt(
-                #     video_frames = video_frames, 
-                #     rank=self.pid,
-                #     # batch_captions[0],
-                #     index = index,
-                # )
+                
                 video_frames = video_frames.unsqueeze(0)
                 
             all_video_frames.append(video_frames)
@@ -319,8 +230,109 @@ class DiffusionRollout(BaseRollout):
             all_latents = latents
             
             all_log_probs = []
+            # i = 0
+            import json
+
+            hook_results2 = []
+            hooks2 = []
+
+            def get_shape(x):
+                """获取 tensor 或嵌套结构的 shape，列表/元组递归处理"""
+                if isinstance(x, torch.Tensor):
+                    return list(x.shape)
+                elif isinstance(x, (list, tuple)):
+                    return [get_shape(i) for i in x]
+                else:
+                    return str(type(x))
+                
+            def compute_norm_tensor(x):
+                """
+                递归计算 tensor norm
+                - 只对浮点 tensor 计算
+                - meta tensor / int tensor 返回 None
+                - list/tuple 递归处理
+                """
+                if isinstance(x, torch.Tensor):
+                    if not x.is_meta:
+                        return x.float().norm()  # 返回 tensor，延迟转 float
+                    else:
+                        return None
+                elif isinstance(x, (list, tuple)):
+                    return [compute_norm_tensor(i) for i in x]
+                else:
+                    return None
+
+            def type_of(x):
+                """递归获取输入输出的类型信息"""
+                if isinstance(x, torch.Tensor):
+                    return str(x.dtype)
+                elif isinstance(x, (list, tuple)):
+                    return [type_of(i) for i in x]
+                else:
+                    return str(type(x))
+                
+            def register_hooks2(module, prefix=""):
+                for name, child in module.named_children():
+                    layer_name = f"{prefix}.{name}" if prefix else name
+
+                    def hook_fn(module, input, output, layer_name=layer_name):
+                        # if layer_name == '_fsdp_wrapped_module.text_embedding.0':
+                        #     logger.warning("---------------------------")
+                        #     logger.warning(input)
+                        #     logger.warning("---------------------------")
+                        #     exit(0)   
+                        hook_results2.append({
+                            "layer": layer_name,
+                            "input_type": type_of(input),
+                            "output_type": type_of(output),
+                            "input_norm": compute_norm_tensor(input),
+                            "output_norm": compute_norm_tensor(output)
+                        })
+
+                    h = child.register_forward_hook(hook_fn)
+                    hooks2.append(h)
+
+                    register_hooks2(child, prefix=layer_name)
+                    
             
+            # torch.manual_seed(42)
+            # torch.cuda.manual_seed_all(42)
+            # if isinstance(latents, list):
+            #     latents = [torch.rand_like(x) for x in latents]
+            # else:
+            #     latents = torch.rand_like(latents)
+
+            # if isinstance(context, list):
+            #     context = [torch.rand_like(x) for x in context]
+            # else:
+            #     context = torch.rand_like(context)
+            with torch.autocast("cuda", torch.bfloat16):
+                for i in range(3):
+                    print(f"warmup {i}")
+                    B = len(context) if isinstance(context, list) else context.shape[0]
+                    device = latents[0].device
+                
+                    # 使用sigma值计算timestep
+                    sigma = sigma_schedule[i]
+                    
+                    timestep_value = int(sigma * 1000)
+                    timestep = torch.full([B], timestep_value, device=device, dtype=torch.long)
+                    
+                    timestep_cond = timestep
+                    pred_cond = transformer(
+                        x=latents,  # [(16, 7, 64, 64)]
+                        t=timestep_cond,
+                        context=context,
+                        seq_len=seq_len
+                    )
+                    
+            print(" --------------- warmup finished. ------------------")
+            register_hooks2(transformer) 
             for i in progress_bar:
+                hooks2.clear()
+                hook_results2.clear()
+                if i == 2: 
+                    break
                 B = len(context) if isinstance(context, list) else context.shape[0]
                 # 确保设备一致
                 device = latents[0].device
@@ -333,18 +345,55 @@ class DiffusionRollout(BaseRollout):
                 
                 timestep_cond = timestep
                 timestep_uncond = timestep
-                transformer.eval()
+                
+
+                        
+                # transformer.eval() # fhd
+                # with torch.autocast("cuda", torch.bfloat16):
                 with torch.autocast("cuda", torch.bfloat16):
                     # WAN模型输入：x是(C,T,H,W)格式的列表
                     # transformer.to(device)
                     print("in rollout latents norm: i", i, latents[0].norm().item())
+                    # torch.manual_seed(42)
+                    # latents = torch.rand_like(latents)
+                    # with torch.no_grad():
                     pred_cond = transformer(
                         x=latents,  # [(16, 7, 64, 64)]
                         t=timestep_cond,
                         context=context,
                         seq_len=seq_len
                     )
-
+                    print(
+                        f"[Rollout] rank {torch.distributed.get_rank()} "
+                        f"step {i}/{self.config.sampling_steps} "
+                        f"shape={tuple(latents[0].shape)} "
+                        f"norm={latents[0].norm().item():.4f} "
+                        f"timestep_cond norm={timestep} "
+                        f"context norm={context[0].norm().item():.4f} "
+                        f"seq_len={seq_len} "
+                        f"pred_cond={pred_cond[0].norm()}"
+                    )
+                    hook_results_json = []
+                    def tensor_to_json_safe(x):
+                        if isinstance(x, torch.Tensor):
+                            return x.detach().cpu().item()  # 标量 norm
+                        elif isinstance(x, (list, tuple)):
+                            return [tensor_to_json_safe(i) for i in x]
+                        else:
+                            return None
+                    hook_results_json2 = []
+                    for entry in hook_results2:
+                        hook_results_json2.append({
+                            "layer": entry["layer"],
+                            "input_type": entry["input_type"],
+                            "output_type": entry["output_type"],
+                            "input_norm": tensor_to_json_safe(entry["input_norm"]),
+                            "output_norm": tensor_to_json_safe(entry["output_norm"])
+                        })
+                    with open(f"14-diffusion-rollout-{i}-result-compile-true-grad-false-rank-{torch.distributed.get_rank()}.json", "w") as f:
+                        json.dump(hook_results_json2, f, indent=2)
+                    
+                    # exit(0)
                     # 处理模型输出
                     if isinstance(pred_cond, dict) and 'rgb' in pred_cond:
                         model_output_cond = pred_cond['rgb'][0]
@@ -352,28 +401,29 @@ class DiffusionRollout(BaseRollout):
                         model_output_cond = pred_cond[0]
                     else:
                         model_output_cond = pred_cond
-
+                        
+                    model_output=model_output_cond
                     # 为无条件预测准备输入
                     # transformer.to(device)
-                    pred_uncond = transformer(
-                        x=latents,  # [(16, 7, 64, 64)]
-                        t=timestep_uncond,
-                        context=neg_context,
-                        seq_len=seq_len
-                    )
+                    # pred_uncond = transformer(
+                    #     x=latents,  # [(16, 7, 64, 64)]
+                    #     t=timestep_uncond,
+                    #     context=neg_context,
+                    #     seq_len=seq_len
+                    # )
 
-                    if isinstance(pred_uncond, dict) and 'rgb' in pred_uncond:
-                        model_output_uncond = pred_uncond['rgb'][0]
-                    elif isinstance(pred_uncond, list):
-                        model_output_uncond = pred_uncond[0]
-                    else:
-                        model_output_uncond = pred_uncond
+                    # if isinstance(pred_uncond, dict) and 'rgb' in pred_uncond:
+                    #     model_output_uncond = pred_uncond['rgb'][0]
+                    # elif isinstance(pred_uncond, list):
+                    #     model_output_uncond = pred_uncond[0]
+                    # else:
+                    #     model_output_uncond = pred_uncond
                         
-                    del pred_cond, pred_uncond
+                    # del pred_cond, pred_uncond
 
-                    # CFG组合
-                    model_output = model_output_uncond + self.config.guide_scale * (model_output_cond - model_output_uncond)
-                    del model_output_cond, model_output_uncond
+                    # # CFG组合
+                    # model_output = model_output_uncond + self.config.guide_scale * (model_output_cond - model_output_uncond)
+                    # del model_output_cond, model_output_uncond
                     torch.cuda.empty_cache()
 
                 # WAN的SDE采样步骤
@@ -391,6 +441,9 @@ class DiffusionRollout(BaseRollout):
                 latents=[next_latents.to(torch.float32)]
                 all_latents.append(latents[0])  # 存储 (16, 7, 64, 64)
                 all_log_probs.append(log_prob)  # 存储 log概率
+                
+                hooks2.clear()
+                hook_results2.clear()
             
             final_latents = pred_original
 
@@ -431,8 +484,8 @@ class DiffusionRollout(BaseRollout):
             prev_sample_mean = prev_sample_mean + log_term * dsigma  # 修正的均值
         
         if grpo and prev_sample is None:
-            prev_sample = prev_sample_mean + torch.randn_like(prev_sample_mean) * std_dev_t
-
+            # prev_sample = prev_sample_mean + torch.randn_like(prev_sample_mean) * std_dev_t
+            prev_sample = prev_sample_mean
         if grpo:
             # 计算log概率
             log_prob = (

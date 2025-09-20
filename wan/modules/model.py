@@ -12,6 +12,8 @@ from verl.utils.ulysses import gate_with_cp_grad_reduce, modulate_with_cp_grad_r
 
 from .attention import flash_attention
 
+import torch.distributed as dist
+
 __all__ = ['WanModel']
 
 T5_CONTEXT_TOKEN_NUMBER = 512
@@ -142,12 +144,17 @@ class WanSelfAttention(nn.Module):
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
 
         # query, key, value function
+        # @torch.compiler.disable
         def qkv_fn(x):
-            q = self.norm_q(self.q(x)).view(b, s, n, d)
-            k = self.norm_k(self.k(x)).view(b, s, n, d)
-            v = self.v(x).view(b, s, n, d)
+            print(f"-----> 0 rank-{torch.distributed.get_rank()} 1 {x.norm()}")
+            print(f"-----> 0 rank-{torch.distributed.get_rank()} 2 {x.float().norm()}")
+            # exit(0)
+            q = self.norm_q(self.q(x.float())).view(b, s, n, d)
+            k = self.norm_k(self.k(x.float())).view(b, s, n, d)
+            v = self.v(x.float()).view(b, s, n, d)
             return q, k, v
-
+        print(f"-----> -1 rank-{torch.distributed.get_rank()} 0 {x.norm()}")
+        print(f"-----> -1 rank-{torch.distributed.get_rank()} 1 {x.float().norm()}")
         q, k, v = qkv_fn(x)
 
         x = flash_attention(
@@ -288,6 +295,7 @@ class WanAttentionBlock(nn.Module):
         freqs,
         context,
         context_lens,
+        block_id
     ):
         r"""
         Args:
@@ -307,14 +315,26 @@ class WanAttentionBlock(nn.Module):
         # assert e[0].dtype == torch.float32
 
         # self-attention
+        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} begin x: {x.float().norm()}", flush=True)
         normed_x1= self.norm1(x).float()
+        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {normed_x1.dtype} normed_x1: {normed_x1.float().norm()}", flush=True)
         modulated_x1 = modulate_with_cp_grad_reduce(normed_x1, e[0], e[1]).contiguous()
+        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {modulated_x1.dtype} modulated_x1: {modulated_x1.float().norm()}", flush=True)
+        # torch.manual_seed(42)  # 固定随机种子
+        # cpu_tensor = torch.rand_like(torch.empty_like(modulated_x1, device="cpu"))
+        # modulated_x1.copy_(cpu_tensor.to(modulated_x1.device))
+        # with torch.inference_mode(False):
+        #     torch.manual_seed(42)
+        #     modulated_x1 = torch.rand_like(modulated_x1)
+        # print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {modulated_x1.dtype} modulated_x1: {modulated_x1.float().norm()}", flush=True)
         y = self.self_attn(
             modulated_x1, seq_lens, grid_sizes,
             freqs).contiguous()
+        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {y.dtype} y: {y.float().norm()}", flush=True)
         # with torch.amp.autocast(dtype=torch.float32):
         x = gate_with_cp_grad_reduce(x, e[2], y).contiguous()
             # x = x + y * e[2]
+        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} gate_with_cp_grad_reduce x: {x.float().norm()}", flush=True)
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
@@ -328,6 +348,8 @@ class WanAttentionBlock(nn.Module):
             return x
 
         x = cross_attn_ffn(x, context, context_lens, e)
+        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} cross_attn_ffn x: {x.float().norm()}", flush=True)
+
         return x
 
 
@@ -512,6 +534,18 @@ class WanModel(ModelMixin, ConfigMixin):
         clip_fea=None,
         y=None,
     ):
+        # torch.save(
+        #     {
+        #         "x": x,
+        #         "t": t,
+        #         "context": context,
+        #         "seq_len": seq_len,
+        #         "clip_fea": clip_fea,
+        #         "y": y,
+        #     },
+        #     f"forward_inputs_{torch.distributed.get_rank()}.pt"
+        # )
+        # exit(0)
         r"""
         Forward pass through the diffusion model
 
@@ -533,6 +567,19 @@ class WanModel(ModelMixin, ConfigMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
+        
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        if isinstance(x, list):
+            x = [torch.rand_like(a) for a in x]
+        else:
+            x = torch.rand_like(x)
+            
+        if isinstance(context, list):
+            context = [torch.rand_like(c) for c in context]
+        else:
+            context = torch.rand_like(context)
+            
         if self.model_type == 'i2v' or self.model_type == 'flf2v':
             assert clip_fea is not None and y is not None
         # params
@@ -545,6 +592,16 @@ class WanModel(ModelMixin, ConfigMixin):
         
         # 这里应该是latent打成embedding
         # embeddings
+        import torch.distributed as dist
+        for i, u in enumerate(x):
+            print(f"[Rank {dist.get_rank()}] before patch_embedding[{i}]", flush=True)
+            print(f" norm: {u.float().norm()}", flush=True)
+            print(f" mean: {u.mean().item()}", flush=True)
+            print(f" std: {u.std().item()}", flush=True)
+            print(f" shape: {u.shape}", flush=True)
+            print(f" stride: {u.stride()}", flush=True)
+            print(f" dtype: {u.dtype}", flush=True)
+            print(f" contiguous: {u.is_contiguous()}", flush=True)
         x = [self.patch_embedding(u.unsqueeze(0)) for u in x]
         grid_sizes = torch.stack(
             [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
@@ -566,13 +623,34 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # context
         context_lens = None
-        context = self.text_embedding(
-            torch.stack([
+        import hashlib
+
+        def tensor_md5(t) -> str:
+            if isinstance(t, (list, tuple)):
+                md5_all = hashlib.md5()
+                for item in t:
+                    md5_all.update(tensor_md5(item).encode())
+                return md5_all.hexdigest()
+            elif isinstance(t, torch.Tensor):
+                # 转换 bfloat16 -> float32 以便 numpy 支持
+                if t.dtype == torch.bfloat16:
+                    t = t.to(torch.float32)
+                t_bytes = t.detach().cpu().numpy().tobytes()
+                return hashlib.md5(t_bytes).hexdigest()
+            else:
+                return hashlib.md5(str(t).encode()).hexdigest()
+        a = torch.stack([
                 torch.cat(
                     [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                 for u in context
-            ]))
-
+            ])
+        print("------------------------------------------------")
+        import torch.distributed as dist
+        print(f"{dist.get_rank()}   -   {tensor_md5(a)} - {a.float().norm()}")
+        print("------------------------------------------------")
+        context = self.text_embedding(
+            a)
+        # exit(0)
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 (x2) x dim
             context = torch.concat([context_clip, context], dim=1)
@@ -586,13 +664,28 @@ class WanModel(ModelMixin, ConfigMixin):
             context=context,
             context_lens=context_lens)
         
-        for block in self.blocks:
-            x = block(x=x, **kwargs)
+        for i, block in enumerate(self.blocks):
+            x = block(x=x, **kwargs, block_id=i)
+            print(f"[FHD Rank {dist.get_rank()}] - block-{i}  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
 
+        # print(f"[FHD Rank {dist.get_rank()}] - 0 x = [u.float() for u in x]", flush=True)
+        
+        print(f"[FHD Rank {dist.get_rank()}] - 0-1  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
         x = self.head(x=x, e=e)
+        print(f"[FHD Rank {dist.get_rank()}] - 1  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
-        return [u.float() for u in x]
+        x = [u.float() for u in x]
+        print(f"[FHD Rank {dist.get_rank()}] - 2 dtype: {x[0].dtype} norm2: {x[0].norm().item()}", flush=True)
+        print(f"[FHD Rank {dist.get_rank()}] - 3 dtype: {x[0].dtype} norm3: {x[0].float().norm()}", flush=True)
+        # print(f" norm2: {x.float().norm().item()}", flush=True)
+        # print(f" mean: {x.mean().item()}", flush=True)
+        # print(f" std: {x.std().item()}", flush=True)
+        # print(f" shape: {x.shape}", flush=True)
+        # print(f" stride: {x.stride()}", flush=True)
+        # print(f" dtype: {x.dtype}", flush=True)
+        # print(f" contiguous: {x.is_contiguous()}", flush=True)
+        return x
 
     def unpatchify(self, x, grid_sizes):
         r"""
