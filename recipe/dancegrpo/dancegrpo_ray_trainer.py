@@ -110,7 +110,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                     num_frames = self.config.actor_rollout_ref.num_frames
                     size = (self.config.actor_rollout_ref.w, self.config.actor_rollout_ref.h)
                     vae_stride = [4, 8, 8]
-                    latent_dtype = torch.float16
+                    latent_dtype = torch.float32
                     latent_shape = (
                         16,
                         (num_frames - 1) // vae_stride[0] + 1,
@@ -126,8 +126,6 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                         return (shift * x) / (1 + (shift - 1) * x)
 
                     for i in range(new_batch.batch.batch_size[0]):  # 注意：这里用 gen_batch，不是 new_batch
-                        # 这两个其实对所有样本都一样，放在循环外算一次也行
-                        
                         sigma_schedule = torch.linspace(1, 0, S + 1)
                         
                         sigma_schedule = sd3_time_shift(self.config.actor_rollout_ref.shift, sigma_schedule)   # [S+1]
@@ -136,7 +134,6 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
 
                         input_latents[i] = torch.randn(latent_shape, dtype=latent_dtype)
 
-                    # 塞回 gen_batch
                     gen_batch.batch["input_latents"]  = input_latents
                     gen_batch.batch["sigma_schedule"] = sigma_schedule_B
                     
@@ -183,7 +180,7 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                     
                     # validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
-                        with marked_timer("testing", timing_raw):
+                        with marked_timer("validation", timing_raw):
                             from verl.utils.checkpoint.checkpoint_manager import save_video_and_prompt
                             video_frames = gen_batch_output.batch["video_frames"] 
                             for i in range(video_frames.shape[0]):
@@ -289,6 +286,8 @@ class RayDanceGRPOTrainer(RayPPOTrainer):
                 # collect metrics
                 # metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=new_batch, timing_raw=timing_raw))
+                print("metrics",metrics)
+                print("="*100)
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 # metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))

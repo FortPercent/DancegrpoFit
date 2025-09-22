@@ -530,7 +530,23 @@ class ActorRolloutRefWorker(Worker, WorkerProfilerExtension):
                 compiled_forward = torch.compile(block.forward, mode="max-autotune-no-cudagraphs")
                 # compiled_forward = torch.compile(block.forward, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None)
                 block.forward = compiled_forward
-        
+        # from wan.modules.model import WanAttentionBlock
+
+        # import os
+        # torch.backends.cudnn.benchmark = False
+        # torch.backends.cuda.matmul.allow_tf32 = False
+        # torch.backends.cudnn.allow_tf32 = False
+        # # # 如需更严格一致性：
+        # # os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        # torch.use_deterministic_algorithms(True)
+                
+        # import os
+        # os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"   # 或 ":4096:8"
+        # torch.use_deterministic_algorithms(True)
+        # torch.backends.cudnn.benchmark = False
+        # torch.backends.cuda.matmul.allow_tf32 = False
+        # torch.backends.cudnn.allow_tf32 = False
+        # torch.set_float32_matmul_precision("high")
         # model.vae_module.decode = torch.compile(
         #    model.vae_module.decode, mode="max-autotune", fullgraph=True, dynamic=True if self.is_hip() else None
         # )

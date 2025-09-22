@@ -14,6 +14,7 @@ from verl.utils.device import get_device_id, get_device_name, get_nccl_backend
 from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
 from verl.utils.ulysses import gather_outpus_and_unpad
 from verl.workers.actor import DataParallelPPOActor
+from verl.utils.py_functional import append_to_dict
 
 # from tensorwatch import TensorWatch,watch_module_forward_backward
 __all__ = ["DiffusionDataParallelPPOActor"]
@@ -136,6 +137,7 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
         perms=perms.to(device)
         # log_file = f"/gemini/space/wuxuaner/Dancegrpo/recipe/dancegrpo/log/rank{get_device_id()}"
         metrics = {}
+        # os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
         for batch_idx, data in enumerate(dataloader):
             td = data.batch
             ctx_lens = td["context_orig_lengths"].tolist() if torch.is_tensor(td["context_orig_lengths"]) else td["context_orig_lengths"]
@@ -176,8 +178,19 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                 seq_len = math.ceil(
                     (latent_shape[3] * latent_shape[4]) / (2 * 2) * latent_shape[2]
                 )
-    
-    
+                arr = latent_t[0].detach().cpu().numpy()  # 取第 0 个样本，转 numpy
+                import hashlib
+                md5 = hashlib.md5(arr.tobytes()).hexdigest()
+                print(
+                    f"[Update] rank {torch.distributed.get_rank()} latents shape={tuple(latent_t.shape)} "
+                    f"step {step_idx}/{train_timesteps} "
+                    f"norm={latent_t.norm().item():.4f} "
+                    f"mean={latent_t.mean().item():.4e} "
+                    f"std={latent_t.std().item():.4e}"
+                    f"latents[0] md5={md5}"
+                )
+                
+                
                 new_log_probs = self.grpo_wan_one_step(
                     latent_t,
                     nlatent_t,
@@ -215,6 +228,7 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                 print("="*100)
 
                 # ratio = torch.exp(new_log_probs - current_log_probs)
+
                 
                 unclipped_loss = -advantages * ratio
                 clipped_loss = -advantages * torch.clamp(
@@ -232,8 +246,8 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                     # "actor/log_ratio_mean": log_ratios.mean().detach().item(),
                     # "actor/preference_mean": preference.mean().detach().item(),
                 }
-                from verl.utils.py_functional import append_to_dict
                 append_to_dict(metrics, data)
+                # exit(0)
                 loss.backward()
 
                 avg_loss = loss.detach()
@@ -260,7 +274,9 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
                 #     exit(0)
             if (batch_idx + 1) % self.gradient_accumulation == 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_module.parameters(), self.config.max_grad_norm)
-                data = {"actor/grad_norm": grad_norm.detach().item(),}
+                self.actor_optimizer.step()
+                self.actor_optimizer.zero_grad()
+                data = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, data)
                 
             del ctxs, nctxs
@@ -303,14 +319,25 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
 
         autocast_dtype = torch.bfloat16
         with torch.autocast("cuda", dtype=autocast_dtype):
+            arr = latents.detach().cpu().numpy()  # 取第 0 个样本，转 numpy
+            import hashlib
+            md5 = hashlib.md5(arr.tobytes()).hexdigest()
 
-            # latents.to(pre_latents.device)
             pred_cond = transformer(
                 x=[latents],
                 t=timesteps,
                 context=context,
                 seq_len=seq_len
             )
+            print(f"[Rollout] rank {torch.distributed.get_rank()} "
+                f"norm={latents.norm().item()} {latents.dtype} "
+                f"pred_cond norm={pred_cond[0].norm().item():.4f} "
+                f"latents[0] md5={md5}"
+                f"timestep={timesteps} "
+                f"context norm={context[0].norm().item():.4f} "
+                f"seq_len={seq_len} "
+            )
+
             
             # 处理条件预测输出
             if isinstance(pred_cond, dict) and 'rgb' in pred_cond:
@@ -325,22 +352,21 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
             # torch.cuda.empty_cache()
                 
             #再计算无条件预测
-            with torch.no_grad(): 
+            with torch.no_grad():
                 pred_uncond = transformer(
                     x=[latents],  # 保持List[Tensor]格式
                     t=timesteps,
                     context=context_null,  # List[Tensor]
                     seq_len=seq_len
                 )
-
                 
-                #处理无条件预测输出
-                if isinstance(pred_uncond, dict) and 'rgb' in pred_uncond:
-                    model_output_uncond = pred_uncond['rgb'][0]
-                elif isinstance(pred_uncond, list):
-                    model_output_uncond = pred_uncond[0]
-                else:
-                    model_output_uncond = pred_uncond
+            #处理无条件预测输出
+            if isinstance(pred_uncond, dict) and 'rgb' in pred_uncond:
+                model_output_uncond = pred_uncond['rgb'][0]
+            elif isinstance(pred_uncond, list):
+                model_output_uncond = pred_uncond[0]
+            else:
+                model_output_uncond = pred_uncond
                     
                 # del pred_uncond
                 # torch.cuda.empty_cache()

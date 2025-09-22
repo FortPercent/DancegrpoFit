@@ -149,7 +149,7 @@ class RewardVLLMManager(BaseShardingManager):
             group = vllm_ps.get_tensor_model_parallel_group()
         else:
             group = vllm_ps.get_tensor_model_parallel_group().device_group
-
+            
         all_gather_data_proto(data=data, process_group=group)
         return data
 

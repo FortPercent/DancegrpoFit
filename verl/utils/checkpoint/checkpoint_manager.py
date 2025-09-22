@@ -239,7 +239,6 @@ def save_video_and_prompt(video_frames, rank, index):
     video_filename = f"wan_video_batch_{timestamp}_{index}.mp4"
     video_path = os.path.join("./videos/output", video_filename)
     os.makedirs("videos/output", exist_ok=True)
-    print(video_np.shape)
     out = cv2.VideoWriter(video_path, 
                           fourcc=cv2.VideoWriter_fourcc(*'mp4v'), 
                           fps=video_np.shape[0], 
