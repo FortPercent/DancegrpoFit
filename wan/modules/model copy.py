@@ -105,7 +105,7 @@ class WanLayerNorm(nn.LayerNorm):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return super().forward(x.float().contiguous()).type_as(x)
+        return super().forward(x.float().contiguous()).float()
 
 
 class WanSelfAttention(nn.Module):
@@ -141,7 +141,8 @@ class WanSelfAttention(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
-        print(f"[FHD Rank {dist.get_rank()}] -WanSelfAttention  dtype: {x.dtype} in modulated_x1: {x.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] -WanSelfAttention  dtype: {x.dtype} in modulated_x1: {x.float().norm()}", flush=True)
 
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
 
@@ -149,37 +150,47 @@ class WanSelfAttention(nn.Module):
         # @torch.compiler.disable
         def qkv_fn(x):
             # exit(0)
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn before self.q x: {x.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn before self.q x: {x.float().norm()}")
             q = self.q(x.float())
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.q before self.norm_q q: {q.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.q before self.norm_q q: {q.float().norm()}")
             q = self.norm_q(q).view(b, s, n, d)
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.norm_q x: {q.float().norm()}")
-
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn before self.k x: {x.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.norm_q x: {q.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn before self.k x: {x.float().norm()}")
             k = self.k(x.float())
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.k before self.norm_k k: {k.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.k before self.norm_k k: {k.float().norm()}")
             k = self.norm_k(k).view(b, s, n, d)
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.norm_k k: {k.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.norm_k k: {k.float().norm()}")
 
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn before self.v x: {x.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn before self.v x: {x.float().norm()}")
             v = self.v(x.float()).view(b, s, n, d)
-            print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.v x: {v.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in qkv_fn after self.v x: {v.float().norm()}")
             return q, k, v
-        print(f"-----> -1 rank-{torch.distributed.get_rank()} 0 {x.norm()}")
+        if torch.distributed.get_rank() == 0:
+            print(f"-----> -1 rank-{torch.distributed.get_rank()} 0 {x.norm()}")
         q, k, v = qkv_fn(x.float())
 
         q = rope_apply(q, grid_sizes, freqs)
         k = rope_apply(k, grid_sizes, freqs)
-        print(f"--= > rank-{torch.distributed.get_rank()} dtype:{q.dtype} before self_attn q: {q.float().norm()}")
-        print(f"--= > rank-{torch.distributed.get_rank()} dtype:{k.dtype} before self_attn k: {k.float().norm()}")
-        print(f"--= > rank-{torch.distributed.get_rank()} dtype:{v.dtype} before self_attn v: {v.float().norm()}")
+        if torch.distributed.get_rank() == 0:
+            print(f"--= > rank-{torch.distributed.get_rank()} dtype:{q.dtype} before self_attn q: {q.float().norm()}")
+            print(f"--= > rank-{torch.distributed.get_rank()} dtype:{k.dtype} before self_attn k: {k.float().norm()}")
+            print(f"--= > rank-{torch.distributed.get_rank()} dtype:{v.dtype} before self_attn v: {v.float().norm()}")
         x = flash_attention(
             q=q,
             k=k,
             v=v,
             k_lens=seq_lens,
             window_size=self.window_size)
-        print(f"--= > rank-{torch.distributed.get_rank()} dtype:{x.dtype} after self_attn x: {x.float().norm()}")
+        if torch.distributed.get_rank() == 0:
+            print(f"--= > rank-{torch.distributed.get_rank()} dtype:{x.dtype} after self_attn x: {x.float().norm()}")
  
         # output
         x = x.flatten(2)
@@ -197,31 +208,39 @@ class WanT2VCrossAttention(WanSelfAttention):
             context_lens(Tensor): Shape [B]
         """
         #fhd 1
-        # x = x.to(torch.float32)
+        x = x.to(torch.float32)
         b, n, d = x.size(0), self.num_heads, self.head_dim
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before self.q x: {x.float().norm()}  dtype:{x.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before self.q x: {x.float().norm()}  dtype:{x.dtype}")
         # compute query, key, value
         q = self.q(x.float())
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.q x: {x.float().norm()}  dtype:{x.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.q x: {x.float().norm()}  dtype:{x.dtype}")
         q = self.norm_q(q.float()).view(b, -1, n, d)
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.norm_q x: {x.float().norm()}  dtype:{x.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.norm_q x: {x.float().norm()}  dtype:{x.dtype}")
         
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before self.k context: {context.float().norm()}  dtype:{context.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before self.k context: {context.float().norm()}  dtype:{context.dtype}")
         k = self.k(context.float())
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.k k: {k.float().norm()} dtype:{k.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.k k: {k.float().norm()} dtype:{k.dtype}")
         k = self.norm_k(k.float()).view(b, -1, n, d)
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.norm_k k: {k.float().norm()} dtype:{k.dtype}")
-        
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before self.v context: {context.float().norm()} dtype:{context.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.norm_k k: {k.float().norm()} dtype:{k.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before self.v context: {context.float().norm()} dtype:{context.dtype}")
         v = self.v(context.float()).view(b, -1, n, d)
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.v v: {v.float().norm()} dtype:{v.dtype}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after self.v v: {v.float().norm()} dtype:{v.dtype}")
 
 
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before flash_attention q: {q.float().norm()} dtype:{q.dtype}")
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before flash_attention k: {k.float().norm()} dtype:{k.dtype}")
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before flash_attention v: {v.float().norm()} dtype:{v.dtype}")
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before flash_attention q: {q.float().norm()} dtype:{q.dtype}")
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before flash_attention k: {k.float().norm()} dtype:{k.dtype}")
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention before flash_attention v: {v.float().norm()} dtype:{v.dtype}")
         x = flash_attention(q, k, v, k_lens=context_lens)
-        print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after flash_attention x: {x.float().norm()}")
+        if torch.distributed.get_rank() == 0:
+            print(f"=--= > rank-{torch.distributed.get_rank()} in WanT2VCrossAttention after flash_attention x: {x.float().norm()}")
 
         # output
         x = x.flatten(2)
@@ -341,15 +360,16 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
-        for i, u in enumerate(x):
-            print(f"[Rank {dist.get_rank()}] in block[{block_id}]", flush=True)
-            print(f"[Rank {dist.get_rank()}] in block norm: {u.float().norm()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] in block mean: {u.mean().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] in block std: {u.std().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] in block shape: {u.shape}", flush=True)
-            print(f"[Rank {dist.get_rank()}] in block stride: {u.stride()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] in block dtype: {u.dtype}", flush=True)
-            print(f"[Rank {dist.get_rank()}] in block contiguous: {u.is_contiguous()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            for i, u in enumerate(x):
+                print(f"[Rank {dist.get_rank()}] in block[{block_id}]", flush=True)
+                print(f"[Rank {dist.get_rank()}] in block norm: {u.float().norm()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] in block mean: {u.mean().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] in block std: {u.std().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] in block shape: {u.shape}", flush=True)
+                print(f"[Rank {dist.get_rank()}] in block stride: {u.stride()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] in block dtype: {u.dtype}", flush=True)
+                print(f"[Rank {dist.get_rank()}] in block contiguous: {u.is_contiguous()}", flush=True)
         # exit(0)
         # assert e.dtype == torch.float32
         # e = e.to(torch.bfloat16)
@@ -359,13 +379,16 @@ class WanAttentionBlock(nn.Module):
         e = (self.modulation + e).chunk(6, dim=1)
         # self.test1(e)
         # assert e[0].dtype == torch.float32
-        # x = x.to(torch.float32)
+        x = x.to(torch.float32)
         # self-attention
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} begin x: {x.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} begin x: {x.float().norm()}", flush=True)
         normed_x1= self.norm1(x).float()
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {normed_x1.dtype} normed_x1: {normed_x1.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {normed_x1.dtype} normed_x1: {normed_x1.float().norm()}", flush=True)
         modulated_x1 = modulate_with_cp_grad_reduce(normed_x1, e[0], e[1]).contiguous()
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {modulated_x1.dtype} modulated_x1: {modulated_x1.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {modulated_x1.dtype} modulated_x1: {modulated_x1.float().norm()}", flush=True)
         # torch.manual_seed(42)  # 固定随机种子
         # cpu_tensor = torch.rand_like(torch.empty_like(modulated_x1, device="cpu"))
         # modulated_x1.copy_(cpu_tensor.to(modulated_x1.device))
@@ -376,43 +399,44 @@ class WanAttentionBlock(nn.Module):
         y = self.self_attn(
             modulated_x1.float(), seq_lens, grid_sizes,
             freqs).contiguous()
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {y.dtype} y: {y.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {y.dtype} y: {y.float().norm()}", flush=True)
         # with torch.amp.autocast(dtype=torch.float32):
         x = gate_with_cp_grad_reduce(x, e[2], y).contiguous()
             # x = x + y * e[2]
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} gate_with_cp_grad_reduce x: {x.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} gate_with_cp_grad_reduce x: {x.float().norm()}", flush=True)
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn before self.norm3 x: {x.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn before self.norm3 x: {x.float().norm()}")
             x = self.norm3(x.float()).float()
-            # x_bytes = x.detach().cpu().numpy().tobytes()
-            # import hashlib
-            # md5 = hashlib.md5(x_bytes).hexdigest()
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.norm3 0 x: {x.norm()} dtype:{x.dtype}")
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.norm3 1 x: {x.float().norm()} dtype:{x.dtype}")
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.norm3 2 x: {x.norm()} dtype:{x.dtype}")
-            # x = x.to(torch.float32) 
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.norm3 x: {x.float().norm()} dtype:{x.dtype}")
+            # x = x.to(torch.float32)
             # context = context.to(torch.float32) 
-            # x_bytes = x.detach().cpu().numpy().tobytes()
-            # import hashlib
-            # md5 = hashlib.md5(x_bytes).hexdigest()
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.norm3 3 x: {x.float().norm()} dtype:{x.dtype}")
-            x = x.float() + self.cross_attn(x.float(), context.float(), context_lens).contiguous()
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.cross_attn x: {x.float().norm()}")
+            x = x.float() + self.cross_attn(x.float(), context.float(), context_lens).float().contiguous()
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.cross_attn x: {x.float().norm()}")
             x = self.norm2(x.float()).float()
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.norm2 x: {x.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.norm2 x: {x.float().norm()}")
             modulated_x2 = modulate_with_cp_grad_reduce(x.float(), e[3].float(), e[4].float()).contiguous()
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after modulate_with_cp_grad_reduce modulated_x2: {modulated_x2.float().norm()}")
-            # modulated_x2 = modulated_x2.to(torch.float32)
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after modulate_with_cp_grad_reduce modulated_x2: {modulated_x2.float().norm()}")
+            modulated_x2 = modulated_x2.to(torch.float32)
             out0 = self.ffn[0](modulated_x2)  # 第一层 Linear
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn[0] out0: {out0.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn[0] out0: {out0.float().norm()}")
             out1 = self.ffn[1](out0.float())  # GELU
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn[1] out1: {out1.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn[1] out1: {out1.float().norm()}")
             y = self.ffn[2](out1.float())  # 第二层 Linear
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn[2] y: {y.float().norm()}")
+            if torch.distributed.get_rank() == 0:
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn[2] y: {y.float().norm()}")
             # y = self.ffn(modulated_x2).contiguous()
-            print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn y: {y.norm()}")
+                print(f"==== > rank-{torch.distributed.get_rank()} in cross_attn_ffn after self.ffn y: {y.norm()}")
 
             # with torch.amp.autocast(dtype=torch.float32):
                 # x = x + y * e[5]
@@ -420,12 +444,14 @@ class WanAttentionBlock(nn.Module):
             
             return x
         #fhd 2
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} before cross_attn_ffn x: {x.float().norm()}", flush=True)
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} before cross_attn_ffn context: {context.float().norm()}", flush=True)
-        # x = x.to(torch.float32)
-        # context = context.to(torch.float32)
-        x = cross_attn_ffn(x.float(), context.float(), context_lens, e)
-        print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} after cross_attn_ffn x: {x.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} before cross_attn_ffn x: {x.float().norm()}", flush=True)
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} before cross_attn_ffn context: {context.float().norm()}", flush=True)
+        x = x.to(torch.float32)
+        context = context.to(torch.float32)
+        x = cross_attn_ffn(x, context, context_lens, e)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - block-{block_id}  dtype: {x.dtype} after cross_attn_ffn x: {x.float().norm()}", flush=True)
         
         # if dist.get_rank() == 0:
         #     exit(0)
@@ -672,44 +698,46 @@ class WanModel(ModelMixin, ConfigMixin):
         # 这里应该是latent打成embedding
         # embeddings
         import torch.distributed as dist
-        
-        for i, u in enumerate(x):
-            print(f"[Rank {dist.get_rank()}] before patch_embedding[{i}]", flush=True)
-            print(f"[Rank {dist.get_rank()}] norm: {u.float().norm()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] mean: {u.mean().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] std: {u.std().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] shape: {u.shape}", flush=True)
-            print(f"[Rank {dist.get_rank()}] stride: {u.stride()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] dtype: {u.dtype}", flush=True)
-            print(f"[Rank {dist.get_rank()}] contiguous: {u.is_contiguous()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            for i, u in enumerate(x):
+                print(f"[Rank {dist.get_rank()}] before patch_embedding[{i}]", flush=True)
+                print(f"[Rank {dist.get_rank()}] norm: {u.float().norm()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] mean: {u.mean().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] std: {u.std().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] shape: {u.shape}", flush=True)
+                print(f"[Rank {dist.get_rank()}] stride: {u.stride()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] dtype: {u.dtype}", flush=True)
+                print(f"[Rank {dist.get_rank()}] contiguous: {u.is_contiguous()}", flush=True)
         x = [self.patch_embedding(u.unsqueeze(0)) for u in x]
         grid_sizes = torch.stack(
             [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
         x = [u.flatten(2).transpose(1, 2) for u in x]
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         assert seq_lens.max() <= seq_len
-        for i, u in enumerate(x):
-            print(f"[Rank {dist.get_rank()}] before torch.cat[{i}]", flush=True)
-            print(f"[Rank {dist.get_rank()}] before torch.cat norm: {u.float().norm()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before torch.cat mean: {u.mean().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before torch.cat std: {u.std().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before torch.cat shape: {u.shape}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before torch.cat stride: {u.stride()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before torch.cat dtype: {u.dtype}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before torch.cat contiguous: {u.is_contiguous()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            for i, u in enumerate(x):
+                print(f"[Rank {dist.get_rank()}] before torch.cat[{i}]", flush=True)
+                print(f"[Rank {dist.get_rank()}] before torch.cat norm: {u.float().norm()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before torch.cat mean: {u.mean().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before torch.cat std: {u.std().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before torch.cat shape: {u.shape}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before torch.cat stride: {u.stride()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before torch.cat dtype: {u.dtype}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before torch.cat contiguous: {u.is_contiguous()}", flush=True)
         x = torch.cat([
             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
                       dim=1) for u in x
         ])
-        for i, u in enumerate(x):
-            print(f"[Rank {dist.get_rank()}] end torch.cat[{i}]", flush=True)
-            print(f"[Rank {dist.get_rank()}] end torch.cat norm: {u.float().norm()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] end torch.cat mean: {u.mean().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] end torch.cat std: {u.std().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] end torch.cat shape: {u.shape}", flush=True)
-            print(f"[Rank {dist.get_rank()}] end torch.cat stride: {u.stride()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] end torch.cat dtype: {u.dtype}", flush=True)
-            print(f"[Rank {dist.get_rank()}] end torch.cat contiguous: {u.is_contiguous()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            for i, u in enumerate(x):
+                print(f"[Rank {dist.get_rank()}] end torch.cat[{i}]", flush=True)
+                print(f"[Rank {dist.get_rank()}] end torch.cat norm: {u.float().norm()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] end torch.cat mean: {u.mean().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] end torch.cat std: {u.std().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] end torch.cat shape: {u.shape}", flush=True)
+                print(f"[Rank {dist.get_rank()}] end torch.cat stride: {u.stride()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] end torch.cat dtype: {u.dtype}", flush=True)
+                print(f"[Rank {dist.get_rank()}] end torch.cat contiguous: {u.is_contiguous()}", flush=True)
         
         # exit(0)
         
@@ -763,36 +791,34 @@ class WanModel(ModelMixin, ConfigMixin):
             freqs=self.freqs,
             context=context,
             context_lens=context_lens)
-        
-        for i, u in enumerate(x):
-            print(f"[Rank {dist.get_rank()}] before block[{i}]", flush=True)
-            print(f"[Rank {dist.get_rank()}] before block norm: {u.float().norm()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before block mean: {u.mean().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before block std: {u.std().item()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before block shape: {u.shape}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before block stride: {u.stride()}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before block dtype: {u.dtype}", flush=True)
-            print(f"[Rank {dist.get_rank()}] before block contiguous: {u.is_contiguous()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            for i, u in enumerate(x):
+                print(f"[Rank {dist.get_rank()}] before block[{i}]", flush=True)
+                print(f"[Rank {dist.get_rank()}] before block norm: {u.float().norm()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before block mean: {u.mean().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before block std: {u.std().item()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before block shape: {u.shape}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before block stride: {u.stride()}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before block dtype: {u.dtype}", flush=True)
+                print(f"[Rank {dist.get_rank()}] before block contiguous: {u.is_contiguous()}", flush=True)
         # exit(0)
         for i, block in enumerate(self.blocks):
-            x = block(x=x.float(), e=e0,
-            seq_lens=seq_lens,
-            grid_sizes=grid_sizes,
-            freqs=self.freqs,
-            context=context,
-            context_lens=context_lens, block_id=i)
-            print(f"[FHD Rank {dist.get_rank()}] - block-{i}  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
+            x = block(x=x, **kwargs, block_id=i)
+            if torch.distributed.get_rank() == 0:
+                print(f"[FHD Rank {dist.get_rank()}] - block-{i}  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
 
         # print(f"[FHD Rank {dist.get_rank()}] - 0 x = [u.float() for u in x]", flush=True)
-        
-        print(f"[FHD Rank {dist.get_rank()}] - 0-1  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - 0-1  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
         x = self.head(x=x, e=e)
-        print(f"[FHD Rank {dist.get_rank()}] - 1  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - 1  dtype: {x.dtype} norm: {x.float().norm()}", flush=True)
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
         x = [u.float() for u in x]
-        print(f"[FHD Rank {dist.get_rank()}] - 2 dtype: {x[0].dtype} norm2: {x[0].norm().item()}", flush=True)
-        print(f"[FHD Rank {dist.get_rank()}] - 3 dtype: {x[0].dtype} norm3: {x[0].float().norm()}", flush=True)
+        if torch.distributed.get_rank() == 0:
+            print(f"[FHD Rank {dist.get_rank()}] - 2 dtype: {x[0].dtype} norm2: {x[0].norm().item()}", flush=True)
+            print(f"[FHD Rank {dist.get_rank()}] - 3 dtype: {x[0].dtype} norm3: {x[0].float().norm()}", flush=True)
         # print(f" norm2: {x.float().norm().item()}", flush=True)
         # print(f" mean: {x.mean().item()}", flush=True)
         # print(f" std: {x.std().item()}", flush=True)

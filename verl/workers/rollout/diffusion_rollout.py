@@ -306,28 +306,28 @@ class DiffusionRollout(BaseRollout):
             #     context = [torch.rand_like(x) for x in context]
             # else:
             #     context = torch.rand_like(context)
-            with torch.autocast("cuda", torch.bfloat16):
-                for i in range(3):
-                    print(f"warmup {i}")
-                    B = len(context) if isinstance(context, list) else context.shape[0]
-                    device = latents[0].device
+            # with torch.autocast("cuda", torch.bfloat16):
+            #     for i in range(3):
+            #         print(f"warmup {i}")
+            #         B = len(context) if isinstance(context, list) else context.shape[0]
+            #         device = latents[0].device
                 
-                    # 使用sigma值计算timestep
-                    sigma = sigma_schedule[i]
+            #         # 使用sigma值计算timestep
+            #         sigma = sigma_schedule[i]
                     
-                    timestep_value = int(sigma * 1000)
-                    timestep = torch.full([B], timestep_value, device=device, dtype=torch.long)
+            #         timestep_value = int(sigma * 1000)
+            #         timestep = torch.full([B], timestep_value, device=device, dtype=torch.long)
                     
-                    timestep_cond = timestep
-                    pred_cond = transformer(
-                        x=latents,  # [(16, 7, 64, 64)]
-                        t=timestep_cond,
-                        context=context,
-                        seq_len=seq_len
-                    )
+            #         timestep_cond = timestep
+            #         pred_cond = transformer(
+            #             x=latents,  # [(16, 7, 64, 64)]
+            #             t=timestep_cond,
+            #             context=context,
+            #             seq_len=seq_len
+            #         )
                     
             print(" --------------- warmup finished. ------------------")
-            register_hooks2(transformer) 
+            # register_hooks2(transformer) 
             for i in progress_bar:
                 hooks2.clear()
                 hook_results2.clear()
@@ -350,13 +350,16 @@ class DiffusionRollout(BaseRollout):
                         
                 # transformer.eval() # fhd
                 # with torch.autocast("cuda", torch.bfloat16):
+                torch.cuda.synchronize()
+                print(f"rank {torch.distributed.get_rank()}. begin rollout {i} !!!!!!!!!!!!!")
                 with torch.autocast("cuda", torch.bfloat16):
                     # WAN模型输入：x是(C,T,H,W)格式的列表
                     # transformer.to(device)
-                    print("in rollout latents norm: i", i, latents[0].norm().item())
+                    print(f"rank {torch.distributed.get_rank()}. in rollout latents norm: i", i, latents[0].norm().item())
                     # torch.manual_seed(42)
                     # latents = torch.rand_like(latents)
                     # with torch.no_grad():
+
                     pred_cond = transformer(
                         x=latents,  # [(16, 7, 64, 64)]
                         t=timestep_cond,
@@ -364,34 +367,35 @@ class DiffusionRollout(BaseRollout):
                         seq_len=seq_len
                     )
                     print(
-                        f"[Rollout] rank {torch.distributed.get_rank()} "
+                        f"[Rollout warmup finished] rank {torch.distributed.get_rank()} "
                         f"step {i}/{self.config.sampling_steps} "
                         f"shape={tuple(latents[0].shape)} "
                         f"norm={latents[0].norm().item():.4f} "
                         f"timestep_cond norm={timestep} "
                         f"context norm={context[0].norm().item():.4f} "
                         f"seq_len={seq_len} "
-                        f"pred_cond={pred_cond[0].norm()}"
+                        f"pred_cond1={pred_cond[0].norm()}"
+                        f"pred_cond2={pred_cond[0].float().norm()}"
                     )
-                    hook_results_json = []
-                    def tensor_to_json_safe(x):
-                        if isinstance(x, torch.Tensor):
-                            return x.detach().cpu().item()  # 标量 norm
-                        elif isinstance(x, (list, tuple)):
-                            return [tensor_to_json_safe(i) for i in x]
-                        else:
-                            return None
-                    hook_results_json2 = []
-                    for entry in hook_results2:
-                        hook_results_json2.append({
-                            "layer": entry["layer"],
-                            "input_type": entry["input_type"],
-                            "output_type": entry["output_type"],
-                            "input_norm": tensor_to_json_safe(entry["input_norm"]),
-                            "output_norm": tensor_to_json_safe(entry["output_norm"])
-                        })
-                    with open(f"14-diffusion-rollout-{i}-result-compile-true-grad-false-rank-{torch.distributed.get_rank()}.json", "w") as f:
-                        json.dump(hook_results_json2, f, indent=2)
+                    # hook_results_json = []
+                    # def tensor_to_json_safe(x):
+                    #     if isinstance(x, torch.Tensor):
+                    #         return x.detach().cpu().item()  # 标量 norm
+                    #     elif isinstance(x, (list, tuple)):
+                    #         return [tensor_to_json_safe(i) for i in x]
+                    #     else:
+                    #         return None
+                    # hook_results_json2 = []
+                    # for entry in hook_results2:
+                    #     hook_results_json2.append({
+                    #         "layer": entry["layer"],
+                    #         "input_type": entry["input_type"],
+                    #         "output_type": entry["output_type"],
+                    #         "input_norm": tensor_to_json_safe(entry["input_norm"]),
+                    #         "output_norm": tensor_to_json_safe(entry["output_norm"])
+                    #     })
+                    # with open(f"14-diffusion-rollout-{i}-result-compile-true-grad-false-rank-{torch.distributed.get_rank()}.json", "w") as f:
+                    #     json.dump(hook_results_json2, f, indent=2)
                     
                     # exit(0)
                     # 处理模型输出

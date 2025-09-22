@@ -368,7 +368,7 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
         if latents.shape[0] != 16:
             raise ValueError(f"Expected 16 channels, got {latents.shape[0]} channels")
         
-        register_hooks(transformer) 
+        # register_hooks(transformer) 
         # exit(0)
         autocast_dtype = torch.bfloat16
         with torch.autocast("cuda", dtype=autocast_dtype):
@@ -398,42 +398,47 @@ class DiffusionDataParallelPPOActor(DataParallelPPOActor):
             #     print(latents)
             #     print(latents.float().norm())
             # exit(0)
+            torch.cuda.synchronize()
+            if torch.distributed.get_rank() == 0:
+                print("begin dp_actor!!!!!!!!!!!!!!!!!!!")
             pred_cond = transformer(
                 x=[latents],
                 t=timesteps,
                 context=context,
                 seq_len=seq_len
             )
-            print(
-                f"[Update] rank {torch.distributed.get_rank()} "
-                f"shape={tuple(latents.shape)} "
-                f"norm={latents.norm().item():.4f} "
-                f"timestep_cond norm={timesteps} "
-                f"context norm={context[0].norm().item():.4f} "
-                f"seq_len={seq_len} "
-                f"pred_cond={pred_cond[0].norm()}"
-            )
+            if torch.distributed.get_rank() == 0:
+                print(
+                    f"[Update] rank {torch.distributed.get_rank()} "
+                    f"shape={tuple(latents.shape)} "
+                    f"norm={latents.norm().item():.4f} "
+                    f"timestep_cond norm={timesteps} "
+                    f"context norm={context[0].norm().item():.4f} "
+                    f"seq_len={seq_len} "
+                    f"pred_cond1={pred_cond[0].norm()}"
+                    f"pred_cond2={pred_cond[0].float().norm()}"
+                )
             
             # 处理条件预测输出
-            hook_results_json = []
-            def tensor_to_json_safe(x):
-                if isinstance(x, torch.Tensor):
-                    return x.detach().cpu().item()  # 标量 norm
-                elif isinstance(x, (list, tuple)):
-                    return [tensor_to_json_safe(i) for i in x]
-                else:
-                    return None
-            hook_results_json = []
-            for entry in hook_results:
-                hook_results_json.append({
-                    "layer": entry["layer"],
-                    "input_type": entry["input_type"],
-                    "output_type": entry["output_type"],
-                    "input_norm": tensor_to_json_safe(entry["input_norm"]),
-                    "output_norm": tensor_to_json_safe(entry["output_norm"])
-                })
-            with open(f"14-dp-actor-result-compile-true-grad-true-rank-{torch.distributed.get_rank()}.json", "w") as f:
-                json.dump(hook_results_json, f, indent=2)
+            # hook_results_json = []
+            # def tensor_to_json_safe(x):
+            #     if isinstance(x, torch.Tensor):
+            #         return x.detach().cpu().item()  # 标量 norm
+            #     elif isinstance(x, (list, tuple)):
+            #         return [tensor_to_json_safe(i) for i in x]
+            #     else:
+            #         return None
+            # hook_results_json = []
+            # for entry in hook_results:
+            #     hook_results_json.append({
+            #         "layer": entry["layer"],
+            #         "input_type": entry["input_type"],
+            #         "output_type": entry["output_type"],
+            #         "input_norm": tensor_to_json_safe(entry["input_norm"]),
+            #         "output_norm": tensor_to_json_safe(entry["output_norm"])
+            #     })
+            # with open(f"14-dp-actor-result-compile-true-grad-true-rank-{torch.distributed.get_rank()}.json", "w") as f:
+            #     json.dump(hook_results_json, f, indent=2)
                 
             exit(0)
             
